@@ -1,369 +1,452 @@
-'use client'
+'use client';
 
-import { useState, useRef, useCallback, useEffect } from 'react'
-import { GoogleGenerativeAI } from '@google/generative-ai'
+import { useState, useRef, useEffect, useCallback } from 'react';
+import { GoogleGenAI, Modality, Tool, FunctionDeclaration } from '@google/genai';
 
+// --- Type Definitions ---
 interface Transcription {
-  id: string
-  text: string
-  timestamp: Date
+  id: string;
+  text: string;
+  type: 'analysis' | 'tool-call' | 'tool-result' | 'error' | 'status';
 }
 
-type RiskLevel = 'SAFE' | 'WARNING' | 'DANGER'
+type RiskLevel = 'SAFE' | 'WARNING' | 'DANGER';
+type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Connected' | 'Error';
 
+// --- Tool Schemas ---
+const call911Tool: FunctionDeclaration = {
+  name: 'call911',
+  description: 'Calls 911 in case of a major emergency like a fire or intruder.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      reason: {
+        type: 'STRING',
+        description: 'A detailed description of the emergency.',
+      },
+    },
+    required: ['reason'],
+  } as any,
+};
+
+const sendNotificationTool: FunctionDeclaration = {
+  name: 'sendNotification',
+  description: 'Sends a notification about a delivered package.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      package_size: {
+        type: 'STRING',
+        description: 'Estimated size of the package (e.g., small, medium, large).',
+      },
+      delivery_time: {
+        type: 'STRING',
+        description: 'The time of the delivery in ISO 8601 format.',
+      },
+    },
+    required: ['package_size', 'delivery_time'],
+  } as any,
+};
+
+const doorTool: FunctionDeclaration = {
+  name: 'door',
+  description: 'Controls a door, either opening or closing it.',
+  parameters: {
+    type: 'OBJECT',
+    properties: {
+      action: {
+        type: 'STRING',
+        description: 'The action to perform: "OPEN" or "CLOSE".',
+      },
+    },
+    required: ['action'],
+  } as any,
+};
+
+// --- Component ---
 export default function SecurityCamera() {
-  const [transcriptions, setTranscriptions] = useState<Transcription[]>([])
-  const [riskLevel, setRiskLevel] = useState<RiskLevel>('SAFE')
-  const [isStreaming, setIsStreaming] = useState(false)
-  const [isClient, setIsClient] = useState(false)
-  const videoRef = useRef<HTMLVideoElement>(null)
-  const streamRef = useRef<MediaStream | null>(null)
-  const sessionRef = useRef<any>(null)
-  const idCounterRef = useRef(0)
+  const [riskLevel, setRiskLevel] = useState<RiskLevel>('SAFE');
+  const [transcriptions, setTranscriptions] = useState<Transcription[]>([]);
+  const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
+  const [error, setError] = useState<string | null>(null);
 
-  // Ensure client-side only rendering
-  useEffect(() => {
-    setIsClient(true)
-  }, [])
+  const videoRef = useRef<HTMLVideoElement>(null);
+  const mediaStreamRef = useRef<MediaStream | null>(null);
+  const liveSessionRef = useRef<any>(null); // Live API session
+  const responseQueueRef = useRef<any[]>([]);
+  const isProcessingQueueRef = useRef(false);
+  const isStreamingRef = useRef(false);
+  const audioContextRef = useRef<AudioContext | null>(null);
+  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
 
-  // Tool definitions for Gemini - using a simplified format
-  const systemPrompt = `You are an AI security system monitoring a live video and audio feed.
-  Your responsibilities are:
-  1. Analyze the video and audio feed for security risks
-  2. Transcribe any speech you hear
-  3. Identify potential security threats (intruders, suspicious behavior, emergencies)
-  4. When you need to take action, output commands in this format:
-     - TOOL_CALL: call911 {"reason": "description of emergency"}
-     - TOOL_CALL: sendNotification {"message": "notification text"}
-     - TOOL_CALL: door {"action": "lock" or "unlock"}
-  5. Output the current risk level as "RISK_LEVEL: [SAFE|WARNING|DANGER]"
-     - SAFE: Normal activity
-     - WARNING: Suspicious activity that needs attention
-     - DANGER: Immediate threat requiring action
-  
-  Always transcribe speech and assess risks continuously.`
+  // --- Utility Functions ---
+  const addTranscription = useCallback((text: string, type: Transcription['type']) => {
+    const id = `transcription-${Date.now()}-${Math.random()}`;
+    setTranscriptions((prev) => [...prev, { id, text, type }]);
+  }, []);
 
-  const startLiveSession = async () => {
-    if (!isClient) return
-    
-    try {
-      // Check if API key is available
-      const apiKey = process.env.NEXT_PUBLIC_GEMINI_API_KEY
-      console.log('API Key status:', apiKey ? 'Present' : 'Missing')
-      
-      if (!apiKey) {
-        console.error('❌ Gemini API key is missing! Please check your .env.local file.')
-        alert('Gemini API key is missing. Please add NEXT_PUBLIC_GEMINI_API_KEY to your .env.local file.')
-        return
-      }
-      
-      // Check if it looks like a valid AI Studio key
-      if (!apiKey.startsWith('AIza')) {
-        console.error('❌ Invalid AI Studio key format. AI Studio keys should start with "AIza"')
-        alert('Invalid AI Studio API key format. Please check your key from https://makersuite.google.com/app/apikey')
-        return
-      }
-      
-      // Get camera stream
-      const stream = await navigator.mediaDevices.getUserMedia({ 
-        video: true, 
-        audio: true 
-      })
-      
-      if (videoRef.current) {
-        videoRef.current.srcObject = stream
-      }
-      
-      streamRef.current = stream
-      setIsStreaming(true)
+  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
 
-      // Initialize Gemini with AI Studio key
-      console.log('🔧 Initializing Gemini AI (AI Studio)...')
-      const genAI = new GoogleGenerativeAI(apiKey)
-      
-      // Try models in order of preference (newest to oldest)
-      const modelNames = [
-        'gemini-2.5-flash',      // Newest, fastest
-        'gemini-1.5-flash',      // Stable fallback
-        'gemini-1.5-pro',        // More capable fallback
-        'gemini-pro'             // Legacy fallback
-      ]
-      
-      let model = null
-      let selectedModel = ''
-      
-      for (const modelName of modelNames) {
-        try {
-          console.log(`🔧 Trying model: ${modelName}`)
-          model = genAI.getGenerativeModel({ model: modelName })
-          
-          // Test the model with a simple request
-          await model.generateContent('Hello')
-          selectedModel = modelName
-          console.log(`✅ Successfully initialized model: ${modelName}`)
-          break
-        } catch (error) {
-          console.log(`❌ Model ${modelName} failed:`, error instanceof Error ? error.message : 'Unknown error')
-          continue
-        }
-      }
-      
-      if (!model) {
-        throw new Error('No available Gemini models found. Please check your API key permissions.')
-      }
-      
-      // Start chat session
-      console.log('🔧 Starting chat session...')
-      const session = await model.startChat({
-        history: [
-          {
-            role: 'user',
-            parts: [{ text: systemPrompt }]
-          },
-          {
-            role: 'model',
-            parts: [{ text: 'Understood. I will monitor the video and audio feed for security risks, transcribe speech, and use the specified command format for tool calls.' }]
-          }
-        ]
-      })
-      
-      console.log(`✅ Chat session started successfully with ${selectedModel}`)
-      sessionRef.current = session
-
-      // Create video and audio streams for Gemini
-      const canvas = document.createElement('canvas')
-      const ctx = canvas.getContext('2d')
-      
-      // Send frames periodically
-      const frameInterval = setInterval(async () => {
-        if (!videoRef.current || !ctx || !sessionRef.current) return
-        
-        canvas.width = videoRef.current.videoWidth
-        canvas.height = videoRef.current.videoHeight
-        ctx.drawImage(videoRef.current, 0, 0)
-        
-        const imageData = canvas.toDataURL('image/jpeg')
-        
-        try {
-          const result = await sessionRef.current.sendMessageStream([
-            {
-              inlineData: {
-                mimeType: 'image/jpeg',
-                data: imageData.split(',')[1]
-              }
-            },
-            {
-              text: 'Analyze this frame for security risks and transcribe any speech.'
-            }
-          ])
-          
-          for await (const chunk of result.stream) {
-            const text = chunk.text()
-            
-            // Check for risk level updates
-            const riskMatch = text.match(/RISK_LEVEL:\s*(SAFE|WARNING|DANGER)/)
-            if (riskMatch) {
-              setRiskLevel(riskMatch[1] as RiskLevel)
-            }
-            
-            // Check for tool calls
-            const toolCallMatches = text.matchAll(/TOOL_CALL:\s*(\w+)\s*({[^}]+})/g)
-            for (const match of toolCallMatches) {
-              const toolName = match[1]
-              const argsStr = match[2]
-              try {
-                const args = JSON.parse(argsStr)
-                await handleToolCall(toolName, args)
-              } catch (error) {
-                console.error('Error parsing tool call:', error)
-              }
-            }
-            
-            // Extract transcriptions (remove risk level and tool call text)
-            const cleanText = text
-              .replace(/RISK_LEVEL:\s*(SAFE|WARNING|DANGER)/g, '')
-              .replace(/TOOL_CALL:\s*\w+\s*{[^}]+}/g, '')
-              .trim()
-            
-            if (cleanText) {
-              setTranscriptions(prev => [...prev, {
-                id: `transcription-${++idCounterRef.current}`,
-                text: cleanText,
-                timestamp: new Date()
-              }])
-            }
-          }
-        } catch (error) {
-          console.error('❌ Error processing frame:', error)
-          // More specific error handling
-          if (error instanceof Error && error.message?.includes('API key')) {
-            console.error('❌ API Key validation failed. Please check your Gemini API key.')
-          }
-        }
-      }, 1000) // Send frame every second
-
-      // Store interval ID for cleanup
-      sessionRef.current.frameInterval = frameInterval
-      
-    } catch (error) {
-      console.error('❌ Error starting camera:', error)
-      
-      // More specific error handling for AI Studio
-      if (error instanceof Error) {
-        if (error.message?.includes('API key') || error.message?.includes('403')) {
-          alert('Invalid AI Studio API key. Please:\n1. Go to https://makersuite.google.com/app/apikey\n2. Create a new API key\n3. Add it to your .env.local file')
-        } else if (error.message?.includes('model') || error.message?.includes('404')) {
-          alert('Model access issue. Please check that your AI Studio API key has access to Gemini models.')
-        } else if (error.message?.includes('quota') || error.message?.includes('429')) {
-          alert('API quota exceeded. Please check your AI Studio usage limits.')
-        } else {
-          alert('Error starting camera: ' + error.message)
-        }
-      } else {
-        alert('Error starting camera: Unknown error occurred')
-      }
-      
-      setIsStreaming(false)
+  // --- Live API Response Handling ---
+  const processResponseQueue = useCallback(async () => {
+    if (isProcessingQueueRef.current || responseQueueRef.current.length === 0) {
+      return;
     }
-  }
+    isProcessingQueueRef.current = true;
+    console.log(`[DEBUG] Processing queue. Size: ${responseQueueRef.current.length}`);
+
+    while (responseQueueRef.current.length > 0) {
+      const message = responseQueueRef.current.shift();
+      if (!message) continue;
+
+      try {
+        if (message.serverContent?.modelTurn?.parts) {
+          for (const part of message.serverContent.modelTurn.parts) {
+            if (part.text) {
+              addTranscription(part.text, 'analysis');
+              const lowerText = part.text.toLowerCase();
+              if (lowerText.includes('danger')) setRiskLevel('DANGER');
+              else if (lowerText.includes('warning')) setRiskLevel('WARNING');
+            } else if (part.functionCall) {
+              await handleToolCall(part.functionCall.name, part.functionCall.args);
+            }
+          }
+        }
+      } catch (e: any) {
+        const errorMessage = `Error processing API response: ${e.message}`;
+        console.error(errorMessage, e);
+        setError(errorMessage);
+        addTranscription(errorMessage, 'error');
+      }
+    }
+
+    isProcessingQueueRef.current = false;
+  }, [addTranscription]);
+
+  // --- Tool Implementations ---
+  const toolImplementations: { [key: string]: (args: any) => Promise<any> } = {
+    call911: async (args: { reason: string }) => {
+      setRiskLevel('DANGER');
+      const response = await fetch('/api/call911', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+      });
+      return await response.json();
+    },
+    sendNotification: async (args: { package_size: string, delivery_time: string }) => {
+      setRiskLevel('WARNING');
+      const response = await fetch('/api/sendNotification', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+      });
+      return await response.json();
+    },
+    door: async (args: { action: 'OPEN' | 'CLOSE' }) => {
+      const response = await fetch('/api/door', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(args),
+      });
+      return await response.json();
+    },
+  };
 
   const handleToolCall = async (toolName: string, args: any) => {
-    let endpoint = ''
-    
-    switch (toolName) {
-      case 'call911':
-        endpoint = '/api/call911'
-        break
-      case 'sendNotification':
-        endpoint = '/api/sendNotification'
-        break
-      case 'door':
-        endpoint = '/api/door'
-        break
-      default:
-        console.error('Unknown tool:', toolName)
-        return
+    addTranscription(`Tool call: ${toolName}(${JSON.stringify(args)})`, 'tool-call');
+    const implementation = toolImplementations[toolName];
+    if (!implementation) {
+      const errorMsg = `Error: Tool '${toolName}' not found.`;
+      addTranscription(errorMsg, 'error');
+      console.error(errorMsg);
+      return;
     }
-    
     try {
-      const response = await fetch(endpoint, {
-        method: 'POST',
-        headers: {
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(args),
-      })
-      
-      if (!response.ok) {
-        console.error('Tool call failed:', await response.text())
+      const result = await implementation(args);
+      addTranscription(`Tool result: ${result.message || JSON.stringify(result)}`, 'tool-result');
+      // The Live API does not currently support sending tool results back to the model.
+    } catch (e: any) {
+      const errorMsg = `Error executing tool '${toolName}': ${e.message}`;
+      addTranscription(errorMsg, 'error');
+      console.error(errorMsg, e);
+    }
+  };
+
+  // --- Core Streaming Logic ---
+  const captureAndSendAudio = useCallback(async (event: AudioProcessingEvent) => {
+    if (!isStreamingRef.current || !liveSessionRef.current) {
+      return;
+    }
+
+    const inputData = event.inputBuffer.getChannelData(0);
+    const targetSampleRate = 16000;
+    const sourceSampleRate = event.inputBuffer.sampleRate;
+    
+    // Simple downsampling
+    const ratio = sourceSampleRate / targetSampleRate;
+    const newLength = Math.round(inputData.length / ratio);
+    const result = new Float32Array(newLength);
+    let offsetResult = 0;
+    let offsetBuffer = 0;
+    while (offsetResult < result.length) {
+      const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
+      let accum = 0, count = 0;
+      for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputData.length; i++) {
+        accum += inputData[i];
+        count++;
       }
-    } catch (error) {
-      console.error('Error calling tool:', error)
+      result[offsetResult] = accum / count;
+      offsetResult++;
+      offsetBuffer = nextOffsetBuffer;
     }
-  }
 
-  const stopLiveSession = () => {
-    // Stop camera stream
-    if (streamRef.current) {
-      streamRef.current.getTracks().forEach(track => track.stop())
-      streamRef.current = null
+    // Convert to 16-bit PCM
+    const pcmData = new Int16Array(result.length);
+    for (let i = 0; i < result.length; i++) {
+      let s = Math.max(-1, Math.min(1, result[i]));
+      s = s < 0 ? s * 0x8000 : s * 0x7FFF;
+      pcmData[i] = s;
+    }
+
+    // Convert to base64
+    const base64Audio = btoa(String.fromCharCode.apply(null, new Uint8Array(pcmData.buffer) as any));
+
+    try {
+      await liveSessionRef.current.sendRealtimeInput({
+        audio: { data: base64Audio, mimeType: 'audio/pcm;rate=16000' },
+      });
+    } catch (e: any) {
+      // Don't log every audio error to avoid spamming the user
+      console.error(`Failed to send audio chunk: ${e.message}`);
+    }
+  }, []);
+
+  const captureAndSendFrame = useCallback(async () => {
+    if (!isStreamingRef.current || !liveSessionRef.current) {
+        return;
+    }
+
+    if (!videoRef.current || videoRef.current.readyState < 2) {
+        console.log(`[DEBUG] Video not ready. State: ${videoRef.current?.readyState}`);
+        return;
     }
     
-    // Clear interval
-    if (sessionRef.current?.frameInterval) {
-      clearInterval(sessionRef.current.frameInterval)
+    console.log(`[DEBUG] Capturing frame. Video dimensions: ${videoRef.current.videoWidth}x${videoRef.current.videoHeight}`);
+
+    const canvas = document.createElement('canvas');
+    canvas.width = videoRef.current.videoWidth;
+    canvas.height = videoRef.current.videoHeight;
+    const ctx = canvas.getContext('2d');
+    if (!ctx) return;
+  
+    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg'));
+  
+    if (blob) {
+      const reader = new FileReader();
+      reader.onloadend = async () => {
+        try {
+          const base64Data = (reader.result as string).split(',')[1];
+          await liveSessionRef.current.sendRealtimeInput({
+            image: { data: base64Data, mimeType: 'image/jpeg' },
+          });
+          console.log('[DEBUG] Frame sent to Live API.');
+        } catch (e: any) {
+          const errorMsg = `Failed to send video frame: ${e.message}`;
+          console.error(errorMsg, e);
+          setError(errorMsg);
+          addTranscription(errorMsg, 'error');
+          // Don't stop streaming for a single failed frame
+        }
+      };
+      reader.readAsDataURL(blob);
     }
-    
-    // Clear session
-    sessionRef.current = null
-    setIsStreaming(false)
-    
+  }, []);
+
+  const stopStreaming = useCallback(() => {
+    isStreamingRef.current = false;
+    setStatus('Disconnected');
+
+    if (liveSessionRef.current) {
+      liveSessionRef.current.close();
+      liveSessionRef.current = null;
+    }
+    if (mediaStreamRef.current) {
+      mediaStreamRef.current.getTracks().forEach(track => track.stop());
+      mediaStreamRef.current = null;
+    }
     if (videoRef.current) {
-      videoRef.current.srcObject = null
+      videoRef.current.srcObject = null;
     }
-  }
+    responseQueueRef.current = [];
+    isProcessingQueueRef.current = false;
+    addTranscription('Security feed stopped.', 'status');
+  }, [addTranscription]);
 
+
+  const handleStreamToggle = async () => {
+    if (isStreamingRef.current) {
+      stopStreaming();
+      return;
+    }
+
+    setError(null);
+    setStatus('Connecting');
+    isStreamingRef.current = true;
+    addTranscription('Starting security feed...', 'status');
+
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
+      mediaStreamRef.current = stream;
+      if (videoRef.current) {
+        videoRef.current.srcObject = stream;
+        await videoRef.current.play();
+      }
+
+      // --- Set up Audio Processing ---
+      const audioContext = new (window.AudioContext || (window as any).webkitAudioContext)();
+      audioContextRef.current = audioContext;
+      await audioContext.resume();
+
+      const source = audioContext.createMediaStreamSource(stream);
+      const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+      scriptProcessorRef.current = scriptProcessor;
+
+      scriptProcessor.onaudioprocess = captureAndSendAudio;
+      source.connect(scriptProcessor);
+      scriptProcessor.connect(audioContext.destination);
+      // --- End Audio Processing Setup ---
+
+      const genAI = new GoogleGenAI({apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY!});
+
+      const config = {
+        responseModalities: [Modality.TEXT],
+        systemInstruction: `You are a helpful and watchful security assistant. Analyze the video and audio feed for potential security risks. Describe what you see and hear. Identify packages and people. If there is a clear emergency (e.g., fire, intruder), use the call911 tool. If a package is delivered, use the sendNotification tool. Do not use tools unless you are certain. Based on the events, update the risk level. A person just walking by is SAFE. A package delivery is a WARNING. An intruder is a DANGER.`,
+        toolConfig: {
+          functionDeclarations: [call911Tool, sendNotificationTool, doorTool],
+        },
+      };
+
+      liveSessionRef.current = await genAI.live.connect({
+        model: 'gemini-live-2.5-flash-preview',
+        config: config,
+        callbacks: {
+          onopen: () => {
+            setStatus('Connected');
+            addTranscription('Live connection opened.', 'status');
+          },
+          onmessage: (message) => {
+            console.log('[DEBUG] Message received from server:', JSON.stringify(message, null, 2));
+            responseQueueRef.current.push(message);
+          },
+          onclose: () => {
+            addTranscription('Live connection closed.', 'status');
+            stopStreaming();
+          },
+          onerror: (e: any) => {
+            const errorMsg = `Live connection error: ${e.message || 'Unknown error'}`;
+            console.error(errorMsg, e);
+            setError(errorMsg);
+            addTranscription(errorMsg, 'error');
+            stopStreaming();
+          },
+        },
+      });
+
+    } catch (e: any) {
+      const errorMsg = `Failed to start streaming: ${e.message}`;
+      console.error(errorMsg, e);
+      setError(errorMsg);
+      addTranscription(errorMsg, 'error');
+      stopStreaming();
+    }
+  };
+  
+  // --- Effects ---
+  useEffect(() => {
+    const frameInterval = setInterval(captureAndSendFrame, 1000);
+    const queueInterval = setInterval(processResponseQueue, 100);
+    return () => {
+      clearInterval(frameInterval);
+      clearInterval(queueInterval);
+      if (scriptProcessorRef.current) {
+        scriptProcessorRef.current.disconnect();
+        scriptProcessorRef.current = null;
+      }
+      if (audioContextRef.current) {
+        audioContextRef.current.close();
+        audioContextRef.current = null;
+      }
+      if (isStreamingRef.current) {
+        stopStreaming();
+      }
+    };
+  }, [captureAndSendFrame, processResponseQueue, stopStreaming]);
+
+  // --- UI Rendering ---
   const getRiskLevelColor = () => {
     switch (riskLevel) {
-      case 'SAFE':
-        return 'bg-green-500'
-      case 'WARNING':
-        return 'bg-yellow-500'
-      case 'DANGER':
-        return 'bg-red-500'
-      default:
-        return 'bg-gray-500'
+      case 'DANGER': return 'text-red-500';
+      case 'WARNING': return 'text-yellow-500';
+      default: return 'text-green-500';
     }
-  }
+  };
 
-  // Show loading state until client-side rendering is ready
-  if (!isClient) {
-    return (
-      <div className="space-y-6">
-        <div className="bg-gray-900 rounded-lg p-6">
-          <h2 className="text-xl font-semibold mb-4">Loading...</h2>
-          <div className="w-full h-96 bg-black rounded-lg flex items-center justify-center">
-            <span className="text-gray-500">Initializing camera...</span>
-          </div>
-        </div>
-      </div>
-    )
+  const getTranscriptionColor = (type: Transcription['type']) => {
+    switch (type) {
+        case 'analysis': return 'text-gray-300';
+        case 'tool-call': return 'text-blue-400';
+        case 'tool-result': return 'text-purple-400';
+        case 'status': return 'text-gray-500';
+        case 'error': return 'text-red-400';
+        default: return 'text-gray-500';
+    }
   }
 
   return (
-    <div className="space-y-6">
-      {/* Camera Feed */}
-      <div className="bg-gray-900 rounded-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Live Camera Feed</h2>
-        <video
-          ref={videoRef}
-          autoPlay
-          playsInline
-          muted
-          className="w-full h-96 bg-black rounded-lg"
-        />
-        <button
-          onClick={isStreaming ? stopLiveSession : startLiveSession}
-          className={`mt-4 px-6 py-2 rounded-lg font-medium ${
-            isStreaming 
-              ? 'bg-red-600 hover:bg-red-700' 
-              : 'bg-blue-600 hover:bg-blue-700'
-          }`}
-        >
-          {isStreaming ? 'Stop Camera' : 'Start Camera'}
-        </button>
-      </div>
-
-      {/* Live Transcription */}
-      <div className="bg-gray-900 rounded-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Live Transcription</h2>
-        <div className="h-48 overflow-y-auto bg-gray-800 rounded-lg p-4">
-          {transcriptions.length === 0 ? (
-            <p className="text-gray-400">No transcriptions yet...</p>
-          ) : (
-            <ul className="space-y-2">
-              {transcriptions.map((transcription) => (
-                <li key={transcription.id} className="text-sm">
-                  <span className="text-gray-500">
-                    {transcription.timestamp.toLocaleTimeString()}:
-                  </span>{' '}
-                  {transcription.text}
-                </li>
-              ))}
-            </ul>
-          )}
+    <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
+      <header className="p-4 border-b border-gray-700 flex justify-between items-center">
+        <h1 className="text-2xl font-bold">Intelligent Security Camera (Live API)</h1>
+        <div className="flex items-center gap-4">
+          <div className="text-sm">STATUS: {status}</div>
+          <div className={`text-xl font-bold ${getRiskLevelColor()}`}>
+            RISK LEVEL: {riskLevel}
+          </div>
         </div>
-      </div>
-
-      {/* Risk Level Indicator */}
-      <div className="bg-gray-900 rounded-lg p-6">
-        <h2 className="text-xl font-semibold mb-4">Security Status</h2>
-        <div className={`${getRiskLevelColor()} rounded-lg p-8 text-center`}>
-          <p className="text-2xl font-bold text-white">
-            Risk Level: {riskLevel}
-          </p>
+      </header>
+      <main className="flex flex-1 p-4 gap-4 overflow-hidden">
+        <div className="flex-1 flex flex-col">
+          <div className="bg-black rounded-lg overflow-hidden aspect-video relative">
+            <video ref={videoRef} playsInline muted className="w-full h-full object-cover"></video>
+            {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
+          </div>
+          <div className="flex-grow-0 pt-4">
+            <button
+              onClick={handleStreamToggle}
+              className={`w-full py-3 text-lg font-bold rounded-lg transition-colors ${
+                isStreamingRef.current
+                  ? 'bg-red-600 hover:bg-red-700' 
+                  : 'bg-green-600 hover:bg-green-700'
+              }`}
+            >
+              {isStreamingRef.current ? 'Stop Streaming' : 'Start Streaming'}
+            </button>
+            {error && <p className="text-red-500 mt-2 text-center">{error}</p>}
+          </div>
         </div>
-      </div>
+        <div className="w-1/3 flex flex-col bg-gray-800 rounded-lg p-4">
+          <h2 className="text-xl font-semibold mb-2 border-b border-gray-600 pb-2">Live Transcription</h2>
+          <div className="flex-1 overflow-y-auto pr-2">
+            {transcriptions.map((t) => (
+              <p key={t.id} className={`mb-1 ${getTranscriptionColor(t.type)}`}>
+                <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
+                {t.text}
+              </p>
+            ))}
+          </div>
+        </div>
+      </main>
     </div>
-  )
+  );
 }
