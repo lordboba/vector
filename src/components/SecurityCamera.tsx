@@ -85,7 +85,7 @@ export default function SecurityCamera() {
   const isProcessingQueueRef = useRef(false);
   const isStreamingRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
-  const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const audioWorkletNodeRef = useRef<AudioWorkletNode | null>(null);
   const transcriptionsRef = useRef<HTMLDivElement>(null);
   const analysisRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<HTMLDivElement>(null);
@@ -283,41 +283,10 @@ export default function SecurityCamera() {
   };
 
   // --- Core Streaming Logic ---
-  const captureAndSendAudio = useCallback(async (event: AudioProcessingEvent) => {
+  const sendAudio = useCallback(async (pcmData: Int16Array) => {
     if (!isStreamingRef.current || !liveSessionRef.current) {
       return;
     }
-
-    const inputData = event.inputBuffer.getChannelData(0);
-    const targetSampleRate = 16000;
-    const sourceSampleRate = event.inputBuffer.sampleRate;
-    
-    // Simple downsampling
-    const ratio = sourceSampleRate / targetSampleRate;
-    const newLength = Math.round(inputData.length / ratio);
-    const result = new Float32Array(newLength);
-    let offsetResult = 0;
-    let offsetBuffer = 0;
-    while (offsetResult < result.length) {
-      const nextOffsetBuffer = Math.round((offsetResult + 1) * ratio);
-      let accum = 0, count = 0;
-      for (let i = offsetBuffer; i < nextOffsetBuffer && i < inputData.length; i++) {
-        accum += inputData[i];
-        count++;
-      }
-      result[offsetResult] = accum / count;
-      offsetResult++;
-      offsetBuffer = nextOffsetBuffer;
-    }
-
-    // Convert to 16-bit PCM
-    const pcmData = new Int16Array(result.length);
-    for (let i = 0; i < result.length; i++) {
-      let s = Math.max(-1, Math.min(1, result[i]));
-      s = s < 0 ? s * 0x8000 : s * 0x7FFF;
-      pcmData[i] = s;
-    }
-
     // Convert to base64
     const base64Audio = btoa(String.fromCharCode.apply(null, new Uint8Array(pcmData.buffer) as any));
 
@@ -443,12 +412,22 @@ export default function SecurityCamera() {
       await audioContext.resume();
 
       const source = audioContext.createMediaStreamSource(stream);
-      const scriptProcessor = audioContext.createScriptProcessor(8192, 1, 1);
-      scriptProcessorRef.current = scriptProcessor;
+      
+      try {
+        await audioContext.audioWorklet.addModule('/audio-processor.js');
+      } catch (e: any) {
+          throw new Error(`Failed to add audio worklet module: ${e.message}`);
+      }
+      
+      const workletNode = new AudioWorkletNode(audioContext, 'audio-processor');
+      audioWorkletNodeRef.current = workletNode;
 
-      scriptProcessor.onaudioprocess = captureAndSendAudio;
-      source.connect(scriptProcessor);
-      scriptProcessor.connect(audioContext.destination);
+      workletNode.port.onmessage = (event) => {
+        sendAudio(event.data);
+      };
+
+      source.connect(workletNode);
+      workletNode.connect(audioContext.destination);
       // --- End Audio Processing Setup ---
 
       const genAI = new GoogleGenAI({apiKey: process.env.NEXT_PUBLIC_GEMINI_API_KEY!});
@@ -551,9 +530,10 @@ export default function SecurityCamera() {
     return () => {
       clearInterval(frameInterval);
       clearInterval(queueInterval);
-      if (scriptProcessorRef.current) {
-        scriptProcessorRef.current.disconnect();
-        scriptProcessorRef.current = null;
+      if (audioWorkletNodeRef.current) {
+        audioWorkletNodeRef.current.port.onmessage = null;
+        audioWorkletNodeRef.current.disconnect();
+        audioWorkletNodeRef.current = null;
       }
       if (audioContextRef.current) {
         audioContextRef.current.close();
@@ -563,7 +543,7 @@ export default function SecurityCamera() {
         stopStreaming();
       }
     };
-  }, [captureAndSendFrame, processResponseQueue, stopStreaming]);
+  }, [captureAndSendFrame, processResponseQueue, stopStreaming, sendAudio]);
 
   // --- UI Rendering ---
   const getRiskLevelColor = () => {
