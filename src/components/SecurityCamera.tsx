@@ -7,7 +7,7 @@ import { GoogleGenAI, Modality, Tool, FunctionDeclaration } from '@google/genai'
 interface Transcription {
   id: string;
   text: string;
-  type: 'analysis' | 'tool-call' | 'tool-result' | 'error' | 'status';
+  type: 'analysis' | 'tool-call' | 'tool-result' | 'error' | 'status' | 'transcription';
 }
 
 interface Event {
@@ -132,6 +132,11 @@ export default function SecurityCamera() {
           for (const part of message.serverContent.modelTurn.parts) {
             console.log('[DEBUG] Processing part:', part);
             if (part.text) {
+              if (part.text.startsWith('TRANSCRIPT: ')) {
+                addTranscription(part.text.replace('TRANSCRIPT: ', ''), 'transcription');
+                continue; // Don't process for risk level keywords
+              }
+
               addTranscription(part.text, 'analysis');
               const lowerText = part.text.toLowerCase();
               
@@ -424,9 +429,10 @@ export default function SecurityCamera() {
 
 **Your Task:**
 1.  Analyze the combined video and audio feed.
-2.  Describe observations in short, factual statements.
-3.  Evaluate the risk level based on the rules below.
-4.  Use tools immediately when conditions are met.
+2.  **Provide a live transcription of any spoken words.** The transcription MUST be accurate with proper grammar and be prefixed with "TRANSCRIPT: ".
+3.  Describe visual observations in short, factual statements. Do not prefix these.
+4.  Evaluate the risk level based on the rules below.
+5.  Use tools immediately when conditions are met.
 
 **Risk Levels & Triggers:**
 *   **SAFE:** The default state. No activity or normal passersby.
@@ -533,6 +539,7 @@ export default function SecurityCamera() {
   const getTranscriptionColor = (type: Transcription['type']) => {
     switch (type) {
         case 'analysis': return 'text-gray-300';
+        case 'transcription': return 'text-cyan-300';
         case 'tool-call': return 'text-blue-400';
         case 'tool-result': return 'text-purple-400';
         case 'status': return 'text-gray-500';
@@ -563,7 +570,7 @@ export default function SecurityCamera() {
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Intelligent Security Camera (Live API)</h1>
+        <h1 className="text-2xl font-bold">Vector AI Security Camera (Live API)</h1>
         <div className="flex items-center gap-4">
           <div className="text-sm">STATUS: {status}</div>
           <div className={`text-xl font-bold ${getRiskLevelColor()}`}>
@@ -591,7 +598,7 @@ export default function SecurityCamera() {
                 {transcriptions.map((t) => (
                   <p key={t.id} className={`text-sm ${getTranscriptionColor(t.type)}`}>
                     <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
-                    {t.text}
+                    {t.type === 'transcription' ? `"${t.text}"` : t.text}
                   </p>
                 ))}
               </div>
