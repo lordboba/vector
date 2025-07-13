@@ -13,7 +13,7 @@ interface Transcription {
 interface Event {
   id: string;
   text: string;
-  type: 'risk-change' | 'tool-executed' | 'connection' | 'error';
+  type: 'DANGER' | 'SAFE' | 'WARNING' |'tool-executed' | 'connection' | 'error';
   timestamp: Date;
 }
 
@@ -172,7 +172,7 @@ export default function SecurityCamera() {
       if (newRiskLevel) {
         setRiskLevel(prevRiskLevel => {
           if (prevRiskLevel !== newRiskLevel) {
-            addEvent(`Risk level changed to ${newRiskLevel}`, 'risk-change');
+            addEvent(`Risk level changed to ${newRiskLevel}`, newRiskLevel === 'DANGER' ? 'DANGER' : newRiskLevel === 'WARNING' ? 'WARNING' : 'SAFE');
           }
           return newRiskLevel as RiskLevel;
         });
@@ -246,7 +246,7 @@ export default function SecurityCamera() {
       console.log('[DEBUG] Executing call911 tool with args:', args);
       setRiskLevel(prevRiskLevel => {
         if (prevRiskLevel !== 'DANGER') {
-          addEvent('Risk level elevated to DANGER', 'risk-change');
+          addEvent('Risk level elevated to DANGER', 'DANGER');
         }
         return 'DANGER';
       });
@@ -264,7 +264,7 @@ export default function SecurityCamera() {
       console.log('[DEBUG] Executing sendNotification tool with args:', args);
       setRiskLevel(prevRiskLevel => {
         if (prevRiskLevel !== 'WARNING') {
-          addEvent('Risk level elevated to WARNING', 'risk-change');
+          addEvent('Risk level elevated to WARNING', 'WARNING');
         }
         return 'WARNING';
       });
@@ -590,9 +590,9 @@ export default function SecurityCamera() {
   // --- UI Rendering ---
   const getRiskLevelColor = () => {
     switch (riskLevel) {
-      case 'DANGER': return 'text-red-500';
+      case 'DANGER': return 'text-red-600';
       case 'WARNING': return 'text-yellow-500';
-      default: return 'text-green-500';
+      default: return 'text-emerald-600';
     }
   };
 
@@ -610,7 +610,9 @@ export default function SecurityCamera() {
 
   const getEventColor = (type: Event['type']) => {
     switch (type) {
-        case 'risk-change': return 'text-neutral-700';
+        case 'SAFE': return 'text-emerald-600';
+        case 'WARNING': return 'text-yellow-600';
+        case 'DANGER': return 'text-red-600';
         case 'tool-executed': return 'text-neutral-700';
         case 'connection': return 'text-neutral-700';
         case 'error': return 'text-red-600';
