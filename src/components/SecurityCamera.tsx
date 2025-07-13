@@ -10,6 +10,13 @@ interface Transcription {
   type: 'analysis' | 'tool-call' | 'tool-result' | 'error' | 'status';
 }
 
+interface Event {
+  id: string;
+  text: string;
+  type: 'risk-change' | 'tool-executed' | 'connection' | 'error';
+  timestamp: Date;
+}
+
 type RiskLevel = 'SAFE' | 'WARNING' | 'DANGER';
 type ConnectionStatus = 'Disconnected' | 'Connecting' | 'Connected' | 'Error';
 
@@ -67,6 +74,7 @@ const doorTool: FunctionDeclaration = {
 export default function SecurityCamera() {
   const [riskLevel, setRiskLevel] = useState<RiskLevel>('SAFE');
   const [transcriptions, setTranscriptions] = useState<Transcription[]>([]);
+  const [events, setEvents] = useState<Event[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
   const [error, setError] = useState<string | null>(null);
 
@@ -83,6 +91,11 @@ export default function SecurityCamera() {
   const addTranscription = useCallback((text: string, type: Transcription['type']) => {
     const id = `transcription-${Date.now()}-${Math.random()}`;
     setTranscriptions((prev) => [...prev, { id, text, type }]);
+  }, []);
+
+  const addEvent = useCallback((text: string, type: Event['type']) => {
+    const id = `event-${Date.now()}-${Math.random()}`;
+    setEvents((prev) => [...prev, { id, text, type, timestamp: new Date() }]);
   }, []);
 
   const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -105,8 +118,19 @@ export default function SecurityCamera() {
             if (part.text) {
               addTranscription(part.text, 'analysis');
               const lowerText = part.text.toLowerCase();
-              if (lowerText.includes('danger')) setRiskLevel('DANGER');
-              else if (lowerText.includes('warning')) setRiskLevel('WARNING');
+              const previousRiskLevel = riskLevel;
+              
+              if (lowerText.includes('danger')) {
+                setRiskLevel('DANGER');
+                if (previousRiskLevel !== 'DANGER') {
+                  addEvent('Risk level elevated to DANGER', 'risk-change');
+                }
+              } else if (lowerText.includes('warning')) {
+                setRiskLevel('WARNING');
+                if (previousRiskLevel !== 'WARNING') {
+                  addEvent('Risk level elevated to WARNING', 'risk-change');
+                }
+              }
             } else if (part.functionCall) {
               await handleToolCall(part.functionCall.name, part.functionCall.args);
             }
@@ -117,16 +141,18 @@ export default function SecurityCamera() {
         console.error(errorMessage, e);
         setError(errorMessage);
         addTranscription(errorMessage, 'error');
+        addEvent(errorMessage, 'error');
       }
     }
 
     isProcessingQueueRef.current = false;
-  }, [addTranscription]);
+  }, [addTranscription, addEvent, riskLevel]);
 
   // --- Tool Implementations ---
   const toolImplementations: { [key: string]: (args: any) => Promise<any> } = {
     call911: async (args: { reason: string }) => {
       setRiskLevel('DANGER');
+      addEvent(`911 called: ${args.reason}`, 'tool-executed');
       const response = await fetch('/api/call911', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -136,6 +162,7 @@ export default function SecurityCamera() {
     },
     sendNotification: async (args: { package_size: string, delivery_time: string }) => {
       setRiskLevel('WARNING');
+      addEvent(`Package notification sent: ${args.package_size} package at ${args.delivery_time}`, 'tool-executed');
       const response = await fetch('/api/sendNotification', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -144,6 +171,7 @@ export default function SecurityCamera() {
       return await response.json();
     },
     door: async (args: { action: 'OPEN' | 'CLOSE' }) => {
+      addEvent(`Door ${args.action.toLowerCase()}ed`, 'tool-executed');
       const response = await fetch('/api/door', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
@@ -155,10 +183,12 @@ export default function SecurityCamera() {
 
   const handleToolCall = async (toolName: string, args: any) => {
     addTranscription(`Tool call: ${toolName}(${JSON.stringify(args)})`, 'tool-call');
+    addEvent(`Tool called: ${toolName}`, 'tool-executed');
     const implementation = toolImplementations[toolName];
     if (!implementation) {
       const errorMsg = `Error: Tool '${toolName}' not found.`;
       addTranscription(errorMsg, 'error');
+      addEvent(errorMsg, 'error');
       console.error(errorMsg);
       return;
     }
@@ -169,6 +199,7 @@ export default function SecurityCamera() {
     } catch (e: any) {
       const errorMsg = `Error executing tool '${toolName}': ${e.message}`;
       addTranscription(errorMsg, 'error');
+      addEvent(errorMsg, 'error');
       console.error(errorMsg, e);
     }
   };
@@ -267,6 +298,7 @@ export default function SecurityCamera() {
   const stopStreaming = useCallback(() => {
     isStreamingRef.current = false;
     setStatus('Disconnected');
+    addEvent('Security feed stopped', 'connection');
 
     if (liveSessionRef.current) {
       liveSessionRef.current.close();
@@ -282,7 +314,7 @@ export default function SecurityCamera() {
     responseQueueRef.current = [];
     isProcessingQueueRef.current = false;
     addTranscription('Security feed stopped.', 'status');
-  }, [addTranscription]);
+  }, [addTranscription, addEvent]);
 
 
   const handleStreamToggle = async () => {
@@ -295,13 +327,21 @@ export default function SecurityCamera() {
     setStatus('Connecting');
     isStreamingRef.current = true;
     addTranscription('Starting security feed...', 'status');
+    addEvent('Starting security feed', 'connection');
 
     try {
       const stream = await navigator.mediaDevices.getUserMedia({ video: true, audio: true });
       mediaStreamRef.current = stream;
       if (videoRef.current) {
         videoRef.current.srcObject = stream;
-        await videoRef.current.play();
+        try {
+          await videoRef.current.play();
+        } catch (e: any) {
+          if (e.name !== 'AbortError') {
+            throw e;
+          }
+          // Ignore AbortError (play() interrupted by new load request)
+        }
       }
 
       // --- Set up Audio Processing ---
@@ -322,7 +362,7 @@ export default function SecurityCamera() {
 
       const config = {
         responseModalities: [Modality.TEXT],
-        systemInstruction: `You are Sentinel AI, a security guard for a live demonstration. Your primary goal is to demonstrate your capabilities by reacting to simulated events.
+        systemInstruction: `You are Vector AI, a security guard for a live demonstration. Your primary goal is to demonstrate your capabilities by reacting to simulated events.
 
 **DEMO INSTRUCTIONS:**
 *   **Treat all inputs as real:** You MUST react to acted scenarios, verbal threats, and test events as if they are genuine security risks.
@@ -361,6 +401,7 @@ export default function SecurityCamera() {
           onopen: () => {
             setStatus('Connected');
             addTranscription('Live connection opened.', 'status');
+            addEvent('Live connection established', 'connection');
           },
           onmessage: (message) => {
             console.log('[DEBUG] Message received from server:', JSON.stringify(message, null, 2));
@@ -368,6 +409,7 @@ export default function SecurityCamera() {
           },
           onclose: () => {
             addTranscription('Live connection closed.', 'status');
+            addEvent('Live connection closed', 'connection');
             stopStreaming();
           },
           onerror: (e: any) => {
@@ -375,6 +417,7 @@ export default function SecurityCamera() {
             console.error(errorMsg, e);
             setError(errorMsg);
             addTranscription(errorMsg, 'error');
+            addEvent(errorMsg, 'error');
             stopStreaming();
           },
         },
@@ -385,11 +428,17 @@ export default function SecurityCamera() {
       console.error(errorMsg, e);
       setError(errorMsg);
       addTranscription(errorMsg, 'error');
+      addEvent(errorMsg, 'error');
       stopStreaming();
     }
   };
   
   // --- Effects ---
+  useEffect(() => {
+    // Automatically start the livestream on mount
+    handleStreamToggle();
+  }, []);
+
   useEffect(() => {
     const frameInterval = setInterval(captureAndSendFrame, 1000);
     const queueInterval = setInterval(processResponseQueue, 100);
@@ -430,6 +479,25 @@ export default function SecurityCamera() {
     }
   }
 
+  const getEventColor = (type: Event['type']) => {
+    switch (type) {
+        case 'risk-change': return 'text-red-400';
+        case 'tool-executed': return 'text-blue-400';
+        case 'connection': return 'text-green-400';
+        case 'error': return 'text-red-400';
+        default: return 'text-gray-400';
+    }
+  }
+
+  const formatTimestamp = (date: Date) => {
+    return date.toLocaleTimeString('en-US', { 
+      hour12: false, 
+      hour: '2-digit', 
+      minute: '2-digit', 
+      second: '2-digit' 
+    });
+  }
+
   return (
     <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
@@ -441,33 +509,44 @@ export default function SecurityCamera() {
           </div>
         </div>
       </header>
-      <main className="flex flex-1 p-4 gap-4 overflow-hidden">
-        <div className="flex-1 flex flex-col">
-          <div className="bg-black rounded-lg overflow-hidden aspect-video relative">
-            <video ref={videoRef} playsInline muted className="w-full h-full object-cover"></video>
-            {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
+      <main className="flex flex-col flex-1 p-4 gap-4 overflow-hidden">
+        <div className="flex flex-row gap-8 flex-1">
+          <div className="flex-1 flex flex-col items-center justify-start">
+            <div className="bg-black rounded-lg overflow-hidden aspect-video relative w-full max-w-lg">
+              <video ref={videoRef} playsInline muted className="w-full h-full object-cover"></video>
+              {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
+            </div>
           </div>
-          <div className="flex-grow-0 pt-4">
-            <button
-              onClick={handleStreamToggle}
-              className={`w-full py-3 text-lg font-bold rounded-lg transition-colors ${
-                isStreamingRef.current
-                  ? 'bg-red-600 hover:bg-red-700' 
-                  : 'bg-green-600 hover:bg-green-700'
-              }`}
-            >
-              {isStreamingRef.current ? 'Stop Streaming' : 'Start Streaming'}
-            </button>
-            {error && <p className="text-red-500 mt-2 text-center">{error}</p>}
+          <div className="w-1/2 flex flex-col items-start justify-start">
+            {/* Optionally add waveform here */}
+            <div className="mb-2 w-full flex items-center justify-center">
+              {/* Placeholder for waveform */}
+              <svg height="32" width="120" className="text-gray-400 mb-2"><g><rect x="5" y="10" width="4" height="12" rx="2" fill="currentColor"/><rect x="15" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="25" y="12" width="4" height="10" rx="2" fill="currentColor"/><rect x="35" y="8" width="4" height="16" rx="2" fill="currentColor"/><rect x="45" y="14" width="4" height="8" rx="2" fill="currentColor"/><rect x="55" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="65" y="10" width="4" height="12" rx="2" fill="currentColor"/><rect x="75" y="8" width="4" height="16" rx="2" fill="currentColor"/><rect x="85" y="12" width="4" height="10" rx="2" fill="currentColor"/><rect x="95" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="105" y="10" width="4" height="12" rx="2" fill="currentColor"/></g></svg>
+            </div>
+            <div className="flex-1 overflow-y-auto w-full">
+              {transcriptions.map((t) => (
+                <p key={t.id} className={`mb-1 ${getTranscriptionColor(t.type)}`}>
+                  <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
+                  {t.text}
+                </p>
+              ))}
+            </div>
           </div>
         </div>
-        <div className="w-1/3 flex flex-col bg-gray-800 rounded-lg p-4">
-          <h2 className="text-xl font-semibold mb-2 border-b border-gray-600 pb-2">Live Transcription</h2>
+        <div className="w-full flex flex-col items-center mt-4">
+          <div className={`w-full max-w-2xl py-3 text-lg font-bold rounded-lg text-center ${
+            riskLevel === 'DANGER' ? 'bg-red-600' : riskLevel === 'WARNING' ? 'bg-yellow-600 text-black' : 'bg-green-600'
+          }`}>
+            Risk Level: {riskLevel}
+          </div>
+        </div>
+        <div className="w-full flex flex-col bg-gray-800 rounded-lg p-4 mt-4 max-w-2xl mx-auto">
+          <h2 className="text-xl font-semibold mb-2 border-b border-gray-600 pb-2">Events</h2>
           <div className="flex-1 overflow-y-auto pr-2">
-            {transcriptions.map((t) => (
-              <p key={t.id} className={`mb-1 ${getTranscriptionColor(t.type)}`}>
-                <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
-                {t.text}
+            {events.map((e) => (
+              <p key={e.id} className={`mb-1 ${getEventColor(e.type)}`}>
+                <span className="font-mono text-xs">{`[${e.type.toUpperCase()}] ${formatTimestamp(e.timestamp)} `}</span>
+                {e.text}
               </p>
             ))}
           </div>
