@@ -105,6 +105,7 @@ export default function SecurityCamera() {
   const [events, setEvents] = useState<Event[]>([]);
   const [status, setStatus] = useState<ConnectionStatus>('Disconnected');
   const [error, setError] = useState<string | null>(null);
+  const [analyserNode, setAnalyserNode] = useState<AnalyserNode | null>(null);
 
   const videoRef = useRef<HTMLVideoElement>(null);
   const mediaStreamRef = useRef<MediaStream | null>(null);
@@ -466,6 +467,7 @@ export default function SecurityCamera() {
     console.log('[DEBUG] Stopping stream...');
     isStreamingRef.current = false;
     setStatus('Disconnected');
+    setAnalyserNode(null);
     addEvent('Security feed stopped', 'connection');
 
     if (liveSessionRef.current) {
@@ -521,6 +523,13 @@ export default function SecurityCamera() {
       await audioContext.resume();
 
       const source = audioContext.createMediaStreamSource(stream);
+
+      // --- Analyser for visualization ---
+      const analyser = audioContext.createAnalyser();
+      analyser.fftSize = 64; // Fewer bars for a cleaner look
+      source.connect(analyser);
+      setAnalyserNode(analyser);
+      // ---
       
       try {
         await audioContext.audioWorklet.addModule('/audio-processor.js');
@@ -660,36 +669,58 @@ export default function SecurityCamera() {
   }, [captureAndSendFrame, processResponseQueue, stopStreaming, sendAudio]);
 
   // --- Sound Wave Component ---
-  const SoundWave = ({ active }: { active: boolean }) => {
-    const heights = ['h-2', 'h-3', 'h-4', 'h-3', 'h-2'];
-    
-    return (
-      <div className="flex items-center space-x-1 ml-2">
-        {[...Array(5)].map((_, i) => (
-          <div
-            key={i}
-            className={`w-1 bg-neutral-700 rounded transition-all duration-300 ${
-              active ? heights[i] : 'h-1'
-            }`}
-            style={{
-              animation: active 
-                ? `waveAnimation ${0.5 + i * 0.1}s infinite ease-in-out alternate` 
-                : undefined,
+  const SoundWave = ({ analyserNode, isConnected }: { analyserNode: AnalyserNode | null, isConnected: boolean }) => {
+    const canvasRef = useRef<HTMLCanvasElement>(null);
 
-            }}
-          />
-        ))}
+    useEffect(() => {
+      if (!analyserNode || !isConnected || !canvasRef.current) {
+        const canvas = canvasRef.current;
+        if (canvas) {
+          const context = canvas.getContext('2d');
+          context?.clearRect(0, 0, canvas.width, canvas.height);
+        }
+        return;
+      }
+
+      const canvas = canvasRef.current;
+      const context = canvas.getContext('2d');
+      if (!context) return;
+
+      analyserNode.fftSize = 64; // Fewer bars for a cleaner look
+      const bufferLength = analyserNode.frequencyBinCount;
+      const dataArray = new Uint8Array(bufferLength);
+      
+      const canvasWidth = canvas.width;
+      const canvasHeight = canvas.height;
+
+      let animationFrameId: number;
+
+      const draw = () => {
+        animationFrameId = requestAnimationFrame(draw);
+        analyserNode.getByteFrequencyData(dataArray);
+        context.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        <style dangerouslySetInnerHTML={{
-          __html: `
-            @keyframes waveAnimation {
-              0% { transform: scaleY(1); }
-              100% { transform: scaleY(2); }
-            }
-          `
-        }} />
-      </div>
-    );
+        const barWidth = 10;
+        const barSpacing = 10;
+        const totalBarsWidth = bufferLength * (barWidth + barSpacing) - barSpacing;
+        let x = (canvasWidth - totalBarsWidth) / 2;
+
+        for (let i = 0; i < bufferLength; i++) {
+          const barHeight = dataArray[i] / 2.0;
+          context.fillStyle = '#404040';
+          context.fillRect(x, canvasHeight - barHeight, barWidth, barHeight);
+          x += barWidth + barSpacing;
+        }
+      };
+
+      draw();
+
+      return () => {
+        cancelAnimationFrame(animationFrameId);
+      };
+    }, [analyserNode, isConnected]);
+
+    return <canvas ref={canvasRef} width="120" height="24" className="ml-2" />;
   };
 
   // --- UI Rendering ---
@@ -772,7 +803,7 @@ export default function SecurityCamera() {
             <div className="flex flex-col w-1/2">
               <div className="flex items-center border-b border-gray-600 p-3 pb-2">
                 <h3 className="text-sm font-semibold">Transcription</h3>
-                <SoundWave active={isTalking} />
+                <SoundWave analyserNode={analyserNode} isConnected={status === 'Connected'} />
               </div>
               <div ref={transcriptionsRef} className="flex-1 overflow-y-auto p-3 pt-3 space-y-1">
                 {transcriptions.filter(t => t.type === 'transcription').map((t) => (
