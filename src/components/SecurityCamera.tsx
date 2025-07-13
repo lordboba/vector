@@ -2,6 +2,7 @@
 
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, Modality, Tool, FunctionDeclaration } from '@google/genai';
+import Popup from '@/components/popup';
 
 // --- Type Definitions ---
 interface Transcription {
@@ -115,6 +116,7 @@ export default function SecurityCamera() {
   const analysisRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<HTMLDivElement>(null);
   const partialJsonResponse = useRef('');
+  const [isPopupOpen, setIsPopupOpen] = useState(false);
 
   // --- Utility Functions ---
   const addTranscription = useCallback((text: string, type: Transcription['type']) => {
@@ -634,7 +636,17 @@ export default function SecurityCamera() {
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
         <h1 className="text-4xl font-bold translate-x-4"><em>Vector</em></h1>
         <div className="flex items-center gap-4">
-          <h2 className="text-2xl -translate-x-4 underline">about</h2>
+          <button onClick={() => setIsPopupOpen(true)}><h2 className="text-2xl -translate-x-4 underline hover:text-neutral-800 cursor-pointer">about</h2></button>
+          <Popup isOpen={isPopupOpen} onClose={() => setIsPopupOpen(false)}>
+            <h2 className="text-2xl font-bold text-neutral-700 mb-2 underline">about</h2>
+            <p>Vector is a AI security camera integrated with Weave and A2A to provide security and real-time video monitoring powered by Gemini-Live 2.5 for offices and homes.</p>
+            <button
+              onClick={() => setIsPopupOpen(false)}
+              className="cursor-pointer mt-4 px-3 py-1 bg-red-600 text-neutral-100 rounded hover:bg-red-700"
+            >
+              Close
+            </button>
+          </Popup>
         </div>
       </header>
       <main className="flex flex-col flex-1 p-4 gap-4 overflow-hidden">
