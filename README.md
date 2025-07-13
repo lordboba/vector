@@ -116,13 +116,10 @@ npm run dev
 
 ---
 
-## 📹 Demo & Screenshots
+## 📹 Demo
 
 ### **Live Demo**
 > **[https://vector-bay.vercel.app](https://vector-bay.vercel.app)**
-
-### **Screenshots**
-> *Screenshots of the live dashboard, risk assessment, and emergency response system coming soon*
 
 ---
 
@@ -147,7 +144,7 @@ This isn't just a hackathon project—it's a glimpse into the future of AI-power
 
 ## 🤝 Team
 
-Built with ❤️ by the Vector team during [Hackathon Name]
+Built with ❤️ by Direction and Magnitude
 
 ---
 
