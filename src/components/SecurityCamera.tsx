@@ -134,18 +134,21 @@ export default function SecurityCamera() {
             if (part.text) {
               addTranscription(part.text, 'analysis');
               const lowerText = part.text.toLowerCase();
-              const previousRiskLevel = riskLevel;
               
               if (lowerText.includes('danger')) {
-                setRiskLevel('DANGER');
-                if (previousRiskLevel !== 'DANGER') {
-                  addEvent('Risk level elevated to DANGER', 'risk-change');
-                }
+                setRiskLevel(prevRiskLevel => {
+                  if (prevRiskLevel !== 'DANGER') {
+                    addEvent('Risk level elevated to DANGER', 'risk-change');
+                  }
+                  return 'DANGER';
+                });
               } else if (lowerText.includes('warning')) {
-                setRiskLevel('WARNING');
-                if (previousRiskLevel !== 'WARNING') {
-                  addEvent('Risk level elevated to WARNING', 'risk-change');
-                }
+                setRiskLevel(prevRiskLevel => {
+                  if (prevRiskLevel !== 'WARNING') {
+                    addEvent('Risk level elevated to WARNING', 'risk-change');
+                  }
+                  return 'WARNING';
+                });
               }
             } else if (part.functionCall) {
               console.log('[DEBUG] Function call detected:', part.functionCall);
@@ -164,13 +167,18 @@ export default function SecurityCamera() {
     }
 
     isProcessingQueueRef.current = false;
-  }, [addTranscription, addEvent, riskLevel]);
+  }, [addTranscription, addEvent]);
 
   // --- Tool Implementations ---
   const toolImplementations: { [key: string]: (args: any) => Promise<any> } = {
     call911: async (args: { reason: string }) => {
       console.log('[DEBUG] Executing call911 tool with args:', args);
-      setRiskLevel('DANGER');
+      setRiskLevel(prevRiskLevel => {
+        if (prevRiskLevel !== 'DANGER') {
+          addEvent('Risk level elevated to DANGER', 'risk-change');
+        }
+        return 'DANGER';
+      });
       addEvent(`911 called: ${args.reason}`, 'tool-executed');
       const response = await fetch('/api/call911', {
         method: 'POST',
@@ -183,7 +191,12 @@ export default function SecurityCamera() {
     },
     sendNotification: async (args: { package_size: string, delivery_time: string }) => {
       console.log('[DEBUG] Executing sendNotification tool with args:', args);
-      setRiskLevel('WARNING');
+      setRiskLevel(prevRiskLevel => {
+        if (prevRiskLevel !== 'WARNING') {
+          addEvent('Risk level elevated to WARNING', 'risk-change');
+        }
+        return 'WARNING';
+      });
       addEvent(`Package notification sent: ${args.package_size} package at ${args.delivery_time}`, 'tool-executed');
       const response = await fetch('/api/sendNotification', {
         method: 'POST',
