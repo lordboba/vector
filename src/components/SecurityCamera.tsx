@@ -712,7 +712,7 @@ export default function SecurityCamera() {
         const maxHeight = canvasHeight;
         const heightPattern = [0.7, 0.4, 0.5, 0.6, 0.8]; // More varied pattern
         const sensitivity = 0.4; // Reduced sensitivity
-        const silenceThreshold = 20;
+        const silenceThreshold = 15;
         const randomFactor = 0.4; // Reduced randomness for smoother animation
 
         const effectiveAvg = avg > silenceThreshold ? avg : 0;
