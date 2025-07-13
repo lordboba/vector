@@ -2,7 +2,7 @@
 // The model expects audio chunks of 100ms duration.
 // At 16000 samples per second, 100ms is 1600 samples.
 // We'll buffer a bit more to be safe and reduce message frequency.
-const CHUNK_SIZE = 800;
+const CHUNK_SIZE = 1600;
 
 /**
  * AudioProcessor class for an AudioWorklet.
