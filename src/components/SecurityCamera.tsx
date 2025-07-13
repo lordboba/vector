@@ -86,16 +86,30 @@ export default function SecurityCamera() {
   const isStreamingRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
+  const observationsRef = useRef<HTMLDivElement>(null);
+  const eventsRef = useRef<HTMLDivElement>(null);
 
   // --- Utility Functions ---
   const addTranscription = useCallback((text: string, type: Transcription['type']) => {
     const id = `transcription-${Date.now()}-${Math.random()}`;
     setTranscriptions((prev) => [...prev, { id, text, type }]);
+    // Auto-scroll to bottom after state update
+    setTimeout(() => {
+      if (observationsRef.current) {
+        observationsRef.current.scrollTop = observationsRef.current.scrollHeight;
+      }
+    }, 0);
   }, []);
 
   const addEvent = useCallback((text: string, type: Event['type']) => {
     const id = `event-${Date.now()}-${Math.random()}`;
     setEvents((prev) => [...prev, { id, text, type, timestamp: new Date() }]);
+    // Auto-scroll to bottom after state update
+    setTimeout(() => {
+      if (eventsRef.current) {
+        eventsRef.current.scrollTop = eventsRef.current.scrollHeight;
+      }
+    }, 0);
   }, []);
 
   const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
@@ -113,8 +127,10 @@ export default function SecurityCamera() {
       if (!message) continue;
 
       try {
+        console.log('[DEBUG] Processing message:', JSON.stringify(message, null, 2));
         if (message.serverContent?.modelTurn?.parts) {
           for (const part of message.serverContent.modelTurn.parts) {
+            console.log('[DEBUG] Processing part:', part);
             if (part.text) {
               addTranscription(part.text, 'analysis');
               const lowerText = part.text.toLowerCase();
@@ -132,16 +148,18 @@ export default function SecurityCamera() {
                 }
               }
             } else if (part.functionCall) {
+              console.log('[DEBUG] Function call detected:', part.functionCall);
               await handleToolCall(part.functionCall.name, part.functionCall.args);
             }
           }
         }
       } catch (e: any) {
         const errorMessage = `Error processing API response: ${e.message}`;
-        console.error(errorMessage, e);
+        console.error('[DEBUG] Error in processResponseQueue:', errorMessage, e);
         setError(errorMessage);
         addTranscription(errorMessage, 'error');
         addEvent(errorMessage, 'error');
+        // Don't stop streaming for processing errors - continue with next message
       }
     }
 
@@ -151,6 +169,7 @@ export default function SecurityCamera() {
   // --- Tool Implementations ---
   const toolImplementations: { [key: string]: (args: any) => Promise<any> } = {
     call911: async (args: { reason: string }) => {
+      console.log('[DEBUG] Executing call911 tool with args:', args);
       setRiskLevel('DANGER');
       addEvent(`911 called: ${args.reason}`, 'tool-executed');
       const response = await fetch('/api/call911', {
@@ -158,9 +177,12 @@ export default function SecurityCamera() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(args),
       });
-      return await response.json();
+      const result = await response.json();
+      console.log('[DEBUG] call911 tool result:', result);
+      return result;
     },
     sendNotification: async (args: { package_size: string, delivery_time: string }) => {
+      console.log('[DEBUG] Executing sendNotification tool with args:', args);
       setRiskLevel('WARNING');
       addEvent(`Package notification sent: ${args.package_size} package at ${args.delivery_time}`, 'tool-executed');
       const response = await fetch('/api/sendNotification', {
@@ -168,20 +190,26 @@ export default function SecurityCamera() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(args),
       });
-      return await response.json();
+      const result = await response.json();
+      console.log('[DEBUG] sendNotification tool result:', result);
+      return result;
     },
     door: async (args: { action: 'OPEN' | 'CLOSE' }) => {
+      console.log('[DEBUG] Executing door tool with args:', args);
       addEvent(`Door ${args.action.toLowerCase()}ed`, 'tool-executed');
       const response = await fetch('/api/door', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(args),
       });
-      return await response.json();
+      const result = await response.json();
+      console.log('[DEBUG] door tool result:', result);
+      return result;
     },
   };
 
   const handleToolCall = async (toolName: string, args: any) => {
+    console.log(`[DEBUG] handleToolCall called for ${toolName} with args:`, args);
     addTranscription(`Tool call: ${toolName}(${JSON.stringify(args)})`, 'tool-call');
     addEvent(`Tool called: ${toolName}`, 'tool-executed');
     const implementation = toolImplementations[toolName];
@@ -193,14 +221,17 @@ export default function SecurityCamera() {
       return;
     }
     try {
+      console.log(`[DEBUG] Executing tool implementation for ${toolName}`);
       const result = await implementation(args);
+      console.log(`[DEBUG] Tool ${toolName} completed successfully:`, result);
       addTranscription(`Tool result: ${result.message || JSON.stringify(result)}`, 'tool-result');
       // The Live API does not currently support sending tool results back to the model.
     } catch (e: any) {
       const errorMsg = `Error executing tool '${toolName}': ${e.message}`;
+      console.error(`[DEBUG] Tool ${toolName} failed:`, errorMsg, e);
       addTranscription(errorMsg, 'error');
       addEvent(errorMsg, 'error');
-      console.error(errorMsg, e);
+      // Don't let tool errors stop the stream - they're non-critical
     }
   };
 
@@ -296,15 +327,24 @@ export default function SecurityCamera() {
   }, []);
 
   const stopStreaming = useCallback(() => {
+    console.log('[DEBUG] stopStreaming called - checking if already stopped');
+    if (!isStreamingRef.current) {
+      console.log('[DEBUG] Stream already stopped, ignoring call');
+      return;
+    }
+    
+    console.log('[DEBUG] Stopping stream...');
     isStreamingRef.current = false;
     setStatus('Disconnected');
     addEvent('Security feed stopped', 'connection');
 
     if (liveSessionRef.current) {
+      console.log('[DEBUG] Closing live session');
       liveSessionRef.current.close();
       liveSessionRef.current = null;
     }
     if (mediaStreamRef.current) {
+      console.log('[DEBUG] Stopping media tracks');
       mediaStreamRef.current.getTracks().forEach(track => track.stop());
       mediaStreamRef.current = null;
     }
@@ -314,6 +354,7 @@ export default function SecurityCamera() {
     responseQueueRef.current = [];
     isProcessingQueueRef.current = false;
     addTranscription('Security feed stopped.', 'status');
+    console.log('[DEBUG] Stream stopped successfully');
   }, [addTranscription, addEvent]);
 
 
@@ -399,6 +440,7 @@ export default function SecurityCamera() {
         config: config,
         callbacks: {
           onopen: () => {
+            console.log('[DEBUG] Live API connection opened');
             setStatus('Connected');
             addTranscription('Live connection opened.', 'status');
             addEvent('Live connection established', 'connection');
@@ -408,17 +450,24 @@ export default function SecurityCamera() {
             responseQueueRef.current.push(message);
           },
           onclose: () => {
+            console.log('[DEBUG] Live API connection closed');
             addTranscription('Live connection closed.', 'status');
             addEvent('Live connection closed', 'connection');
             stopStreaming();
           },
           onerror: (e: any) => {
             const errorMsg = `Live connection error: ${e.message || 'Unknown error'}`;
-            console.error(errorMsg, e);
+            console.error('[DEBUG] Live API error:', errorMsg, e);
             setError(errorMsg);
             addTranscription(errorMsg, 'error');
             addEvent(errorMsg, 'error');
-            stopStreaming();
+            // Only stop streaming for critical connection errors, not tool execution errors
+            if (e.message && (e.message.includes('connection') || e.message.includes('network') || e.message.includes('timeout'))) {
+              console.log('[DEBUG] Critical connection error detected, stopping stream');
+              stopStreaming();
+            } else {
+              console.log('[DEBUG] Non-critical error, continuing stream');
+            }
           },
         },
       });
@@ -523,13 +572,16 @@ export default function SecurityCamera() {
               {/* Placeholder for waveform */}
               <svg height="32" width="120" className="text-gray-400 mb-2"><g><rect x="5" y="10" width="4" height="12" rx="2" fill="currentColor"/><rect x="15" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="25" y="12" width="4" height="10" rx="2" fill="currentColor"/><rect x="35" y="8" width="4" height="16" rx="2" fill="currentColor"/><rect x="45" y="14" width="4" height="8" rx="2" fill="currentColor"/><rect x="55" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="65" y="10" width="4" height="12" rx="2" fill="currentColor"/><rect x="75" y="8" width="4" height="16" rx="2" fill="currentColor"/><rect x="85" y="12" width="4" height="10" rx="2" fill="currentColor"/><rect x="95" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="105" y="10" width="4" height="12" rx="2" fill="currentColor"/></g></svg>
             </div>
-            <div className="flex-1 overflow-y-auto w-full">
-              {transcriptions.map((t) => (
-                <p key={t.id} className={`mb-1 ${getTranscriptionColor(t.type)}`}>
-                  <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
-                  {t.text}
-                </p>
-              ))}
+            <div className="h-64 overflow-y-auto w-full bg-gray-800 rounded-lg p-3">
+              <h3 className="text-sm font-semibold mb-2 border-b border-gray-600 pb-1">Observations</h3>
+              <div ref={observationsRef} className="space-y-1">
+                {transcriptions.map((t) => (
+                  <p key={t.id} className={`text-sm ${getTranscriptionColor(t.type)}`}>
+                    <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
+                    {t.text}
+                  </p>
+                ))}
+              </div>
             </div>
           </div>
         </div>
@@ -542,13 +594,15 @@ export default function SecurityCamera() {
         </div>
         <div className="w-full flex flex-col bg-gray-800 rounded-lg p-4 mt-4 max-w-2xl mx-auto">
           <h2 className="text-xl font-semibold mb-2 border-b border-gray-600 pb-2">Events</h2>
-          <div className="flex-1 overflow-y-auto pr-2">
-            {events.map((e) => (
-              <p key={e.id} className={`mb-1 ${getEventColor(e.type)}`}>
-                <span className="font-mono text-xs">{`[${e.type.toUpperCase()}] ${formatTimestamp(e.timestamp)} `}</span>
-                {e.text}
-              </p>
-            ))}
+          <div ref={eventsRef} className="h-48 overflow-y-auto pr-2">
+            <div className="space-y-1">
+              {events.map((e) => (
+                <p key={e.id} className={`text-sm ${getEventColor(e.type)}`}>
+                  <span className="font-mono text-xs">{`[${e.type.toUpperCase()}] ${formatTimestamp(e.timestamp)} `}</span>
+                  {e.text}
+                </p>
+              ))}
+            </div>
           </div>
         </div>
       </main>
