@@ -596,23 +596,23 @@ export default function SecurityCamera() {
 
   const getTranscriptionColor = (type: Transcription['type']) => {
     switch (type) {
-        case 'analysis': return 'text-gray-300';
-        case 'transcription': return 'text-cyan-300';
-        case 'tool-call': return 'text-blue-400';
+        case 'analysis': return 'text-neutral-700';
+        case 'transcription': return 'text-neutral-700';
+        case 'tool-call': return 'text-neutral-700';
         case 'tool-result': return 'text-purple-400';
-        case 'status': return 'text-gray-500';
-        case 'error': return 'text-red-400';
-        default: return 'text-gray-500';
+        case 'status': return 'text-neutral-700';
+        case 'error': return 'text-red-600';
+        default: return 'text-neutral-700';
     }
   }
 
   const getEventColor = (type: Event['type']) => {
     switch (type) {
-        case 'risk-change': return 'text-red-400';
-        case 'tool-executed': return 'text-blue-400';
-        case 'connection': return 'text-green-400';
-        case 'error': return 'text-red-400';
-        default: return 'text-gray-400';
+        case 'risk-change': return 'text-red-600';
+        case 'tool-executed': return 'text-neutral-700';
+        case 'connection': return 'text-emerald-600';
+        case 'error': return 'text-red-600';
+        default: return 'text-neutral-700';
     }
   }
 
@@ -626,11 +626,11 @@ export default function SecurityCamera() {
   }
 
   return (
-    <div className="flex flex-col h-screen bg-gray-900 text-white font-sans">
+    <div className="flex flex-col h-screen bg-neutral-100 text-neutral-700 font-mono">
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
-        <h1 className="text-2xl font-bold">Vector AI Security Camera (Live API)</h1>
+        <h1 className="text-4xl font-bold translate-x-4">Vector</h1>
         <div className="flex items-center gap-4">
-
+          <h2 className="text-2xl -translate-x-4">about</h2>
         </div>
       </header>
       <main className="flex flex-col flex-1 p-4 gap-4 overflow-hidden">
@@ -642,10 +642,10 @@ export default function SecurityCamera() {
             <div className="flex-1 flex items-center justify-center">
               <div className="bg-black rounded-lg overflow-hidden aspect-video relative w-full">
                 <video ref={videoRef} playsInline muted className="w-full h-full object-cover"></video>
-                {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
+                {status !== 'Connected' && <div className="absolute inset-0 bg-neutral-800 bg-opacity-50 flex items-center justify-center text-xl text-neutral-100">Camera Off</div>}
               </div>
             </div>
-            <div className="flex-1 bg-gray-800 rounded-lg flex flex-col overflow-hidden">
+            <div className="flex-1 bg-transparent rounded-lg flex flex-col overflow-hidden">
               <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Transcription</h3>
               <div ref={transcriptionsRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
                 {transcriptions.filter(t => t.type === 'transcription').map((t) => (
@@ -659,8 +659,8 @@ export default function SecurityCamera() {
           </div>
           {/* Risk Banner */}
         <div className="w-full flex flex-col items-center">
-          <div className={`w-full py-3 text-lg font-bold rounded-lg text-center ${
-            riskLevel === 'DANGER' ? 'bg-red-600' : riskLevel === 'WARNING' ? 'bg-yellow-600 text-black' : 'bg-green-600'
+          <div className={`w-full py-3 text-lg font-bold rounded-lg text-center text-neutral-100 ${
+            riskLevel === 'DANGER' ? 'bg-rose-700' : riskLevel === 'WARNING' ? 'bg-yellow-400 text-black' : 'bg-emerald-600'
           }`}>
             Risk Level: {riskLevel}
           </div>
@@ -668,7 +668,7 @@ export default function SecurityCamera() {
           {/* Bottom Row: Log panels */}
           <div className="flex-1 flex flex-row gap-4 overflow-hidden">
             {/* Analysis Box */}
-            <div className="flex-1 bg-gray-800 rounded-lg flex flex-col overflow-hidden">
+            <div className="flex-1 bg-neutral-300 rounded-lg flex flex-col overflow-hidden">
               <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Analysis & Logs</h3>
               <div ref={analysisRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
                  {transcriptions.filter(t => t.type !== 'transcription').map((t) => (
@@ -681,7 +681,7 @@ export default function SecurityCamera() {
             </div>
 
             {/* Events Box */}
-            <div className="flex-1 bg-gray-800 rounded-lg flex flex-col overflow-hidden">
+            <div className="flex-1 bg-neutral-300 rounded-lg flex flex-col overflow-hidden">
                 <h2 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Events</h2>
                 <div ref={eventsRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
                     {events.map((e) => (
