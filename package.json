@@ -12,6 +12,7 @@
     "@google/genai": "^1.9.0",
     "@google/generative-ai": "^0.24.1",
     "@types/ws": "^8.18.1",
+    "exa-js": "^1.8.20",
     "next": "15.3.5",
     "react": "^19.0.0",
     "react-dom": "^19.0.0",

@@ -17,7 +17,7 @@
 
 ### ⚡ **Autonomous Response System**
 - **Emergency Detection**: Automatically identifies threats and can call 911 when needed
-- **Smart Notifications**: Detects package deliveries and sends intelligent alerts
+- **Smart Notifications**: Detects package deliveries and sends intelligent alerts, enriched with contextual information from Exa AI.
 - **Access Control**: AI-powered door control based on security assessment
 - **Risk Assessment**: Categorizes threats in real-time (SAFE, WARNING, DANGER)
 
@@ -45,6 +45,7 @@
 ### **AI Integration**
 - **Google Gemini Live 2.5 Flash** - Real-time multimodal AI
 - **Google Gemini Pro** - Deep analytical processing
+- **Exa API** - Used for contextual search to enrich notifications.
 - **Custom Response Schema** - Structured AI output for reliable automation
 
 ---
@@ -70,8 +71,9 @@
 ### Prerequisites
 ```bash
 # Environment Variables
-GOOGLE_API_KEY=your_gemini_api_key
 GEMINI_API_KEY=your_gemini_api_key
+EXA_API_KEY=your_exa_api_key
+WEAVE_API_KEY=your_weave_api_key
 ```
 
 ### Installation
