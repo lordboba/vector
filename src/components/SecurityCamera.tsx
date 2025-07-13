@@ -610,7 +610,7 @@ export default function SecurityCamera() {
 
   const getEventColor = (type: Event['type']) => {
     switch (type) {
-        case 'risk-change': return 'text-yellow-500';
+        case 'risk-change': return 'text-neutral-700';
         case 'tool-executed': return 'text-neutral-700';
         case 'connection': return 'text-neutral-700';
         case 'error': return 'text-red-600';
