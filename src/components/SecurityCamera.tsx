@@ -86,7 +86,8 @@ export default function SecurityCamera() {
   const isStreamingRef = useRef(false);
   const audioContextRef = useRef<AudioContext | null>(null);
   const scriptProcessorRef = useRef<ScriptProcessorNode | null>(null);
-  const observationsRef = useRef<HTMLDivElement>(null);
+  const transcriptionsRef = useRef<HTMLDivElement>(null);
+  const analysisRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<HTMLDivElement>(null);
 
   // --- Utility Functions ---
@@ -95,8 +96,17 @@ export default function SecurityCamera() {
     setTranscriptions((prev) => [...prev, { id, text, type }]);
     // Auto-scroll to bottom after state update
     setTimeout(() => {
-      if (observationsRef.current) {
-        observationsRef.current.scrollTop = observationsRef.current.scrollHeight;
+      let refToScroll;
+      // Decide which container to scroll
+      if (type === 'transcription') {
+        refToScroll = transcriptionsRef;
+      } else {
+        // Scroll analysis box for analysis, tools, status, errors
+        refToScroll = analysisRef;
+      }
+      
+      if (refToScroll?.current) {
+        refToScroll.current.scrollTop = refToScroll.current.scrollHeight;
       }
     }, 0);
   }, []);
@@ -112,7 +122,7 @@ export default function SecurityCamera() {
     }, 0);
   }, []);
 
-  const wait = (ms: number) => new Promise(resolve => setTimeout(resolve, ms));
+  const wait = useCallback((ms: number) => new Promise(resolve => setTimeout(resolve, ms)), []);
 
   // --- Live API Response Handling ---
   const processResponseQueue = useCallback(async () => {
@@ -129,35 +139,54 @@ export default function SecurityCamera() {
       try {
         console.log('[DEBUG] Processing message:', JSON.stringify(message, null, 2));
         if (message.serverContent?.modelTurn?.parts) {
-          for (const part of message.serverContent.modelTurn.parts) {
-            console.log('[DEBUG] Processing part:', part);
-            if (part.text) {
-              if (part.text.startsWith('TRANSCRIPT: ')) {
-                addTranscription(part.text.replace('TRANSCRIPT: ', ''), 'transcription');
-                continue; // Don't process for risk level keywords
-              }
-
-              addTranscription(part.text, 'analysis');
-              const lowerText = part.text.toLowerCase();
-              
-              if (lowerText.includes('danger')) {
-                setRiskLevel(prevRiskLevel => {
-                  if (prevRiskLevel !== 'DANGER') {
-                    addEvent('Risk level elevated to DANGER', 'risk-change');
-                  }
-                  return 'DANGER';
-                });
-              } else if (lowerText.includes('warning')) {
-                setRiskLevel(prevRiskLevel => {
-                  if (prevRiskLevel !== 'WARNING') {
-                    addEvent('Risk level elevated to WARNING', 'risk-change');
-                  }
-                  return 'WARNING';
-                });
-              }
-            } else if (part.functionCall) {
+          const parts = message.serverContent.modelTurn.parts;
+          let i = 0;
+          while (i < parts.length) {
+            const part = parts[i];
+            
+            if (part.functionCall) {
               console.log('[DEBUG] Function call detected:', part.functionCall);
               await handleToolCall(part.functionCall.name, part.functionCall.args);
+              i++;
+              continue;
+            }
+
+            if (!part.text) {
+              i++;
+              continue;
+            }
+
+            if (part.text.startsWith('TRANSCRIPT: ')) {
+              let content = part.text.replace('TRANSCRIPT: ', '');
+              let j = i + 1;
+              while (j < parts.length && parts[j].text && !parts[j].text.startsWith('TRANSCRIPT: ') && !parts[j].text.startsWith('ANALYSIS: ')) {
+                content += parts[j].text;
+                j++;
+              }
+              addTranscription(content, 'transcription');
+              i = j;
+            } else {
+              // Treat as analysis by default, and merge continuations
+              let content = part.text.startsWith('ANALYSIS: ') ? part.text.replace('ANALYSIS: ', '') : part.text;
+              let j = i + 1;
+              while (j < parts.length && parts[j].text && !parts[j].text.startsWith('TRANSCRIPT: ') && !parts[j].text.startsWith('ANALYSIS: ')) {
+                content += parts[j].text;
+                j++;
+              }
+              
+              addTranscription(content, 'analysis');
+              const riskMatch = content.match(/RISK: (SAFE|WARNING|DANGER)/);
+
+              if (riskMatch && riskMatch[1]) {
+                const newRiskLevel = riskMatch[1] as RiskLevel;
+                setRiskLevel(prevRiskLevel => {
+                  if (prevRiskLevel !== newRiskLevel) {
+                    addEvent(`Risk level changed to ${newRiskLevel}`, 'risk-change');
+                  }
+                  return newRiskLevel;
+                });
+              }
+              i = j;
             }
           }
         }
@@ -302,47 +331,52 @@ export default function SecurityCamera() {
     }
   }, []);
 
-  const captureAndSendFrame = useCallback(async () => {
-    if (!isStreamingRef.current || !liveSessionRef.current) {
-        return;
-    }
-
-    if (!videoRef.current || videoRef.current.readyState < 2) {
-        console.log(`[DEBUG] Video not ready. State: ${videoRef.current?.readyState}`);
-        return;
-    }
-    
-    console.log(`[DEBUG] Capturing frame. Video dimensions: ${videoRef.current.videoWidth}x${videoRef.current.videoHeight}`);
-
-    const canvas = document.createElement('canvas');
-    canvas.width = videoRef.current.videoWidth;
-    canvas.height = videoRef.current.videoHeight;
-    const ctx = canvas.getContext('2d');
-    if (!ctx) return;
-  
-    ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-    const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg'));
-  
-    if (blob) {
-      const reader = new FileReader();
-      reader.onloadend = async () => {
-        try {
-          const base64Data = (reader.result as string).split(',')[1];
-          await liveSessionRef.current.sendRealtimeInput({
-            image: { data: base64Data, mimeType: 'image/jpeg' },
-          });
-          console.log('[DEBUG] Frame sent to Live API.');
-        } catch (e: any) {
-          const errorMsg = `Failed to send video frame: ${e.message}`;
-          console.error(errorMsg, e);
-          setError(errorMsg);
-          addTranscription(errorMsg, 'error');
-          // Don't stop streaming for a single failed frame
+  const captureAndSendFrame = useCallback(async (frameCount = 1) => {
+    for (let i = 0; i < frameCount; i++) {
+        if (!isStreamingRef.current || !liveSessionRef.current) {
+            return;
         }
-      };
-      reader.readAsDataURL(blob);
+
+        if (!videoRef.current || videoRef.current.readyState < 2) {
+            console.log(`[DEBUG] Video not ready. State: ${videoRef.current?.readyState}`);
+            return;
+        }
+        
+        console.log(`[DEBUG] Capturing frame ${i + 1}/${frameCount}. Video dimensions: ${videoRef.current.videoWidth}x${videoRef.current.videoHeight}`);
+
+        const canvas = document.createElement('canvas');
+        canvas.width = videoRef.current.videoWidth;
+        canvas.height = videoRef.current.videoHeight;
+        const ctx = canvas.getContext('2d');
+        if (!ctx) return;
+    
+        ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg'));
+    
+        if (blob) {
+        const reader = new FileReader();
+        reader.onloadend = async () => {
+            try {
+            const base64Data = (reader.result as string).split(',')[1];
+            await liveSessionRef.current.sendRealtimeInput({
+                image: { data: base64Data, mimeType: 'image/jpeg' },
+            });
+            console.log(`[DEBUG] Frame ${i + 1}/${frameCount} sent to Live API.`);
+            } catch (e: any) {
+            const errorMsg = `Failed to send video frame: ${e.message}`;
+            console.error(errorMsg, e);
+            setError(errorMsg);
+            addTranscription(errorMsg, 'error');
+            // Don't stop streaming for a single failed frame
+            }
+        };
+        reader.readAsDataURL(blob);
+        }
+        if (i < frameCount - 1) {
+            await wait(500); // Wait between frames
+        }
     }
-  }, []);
+  }, [addTranscription, setError, wait]);
 
   const stopStreaming = useCallback(() => {
     console.log('[DEBUG] stopStreaming called - checking if already stopped');
@@ -409,7 +443,7 @@ export default function SecurityCamera() {
       await audioContext.resume();
 
       const source = audioContext.createMediaStreamSource(stream);
-      const scriptProcessor = audioContext.createScriptProcessor(4096, 1, 1);
+      const scriptProcessor = audioContext.createScriptProcessor(8192, 1, 1);
       scriptProcessorRef.current = scriptProcessor;
 
       scriptProcessor.onaudioprocess = captureAndSendAudio;
@@ -430,8 +464,8 @@ export default function SecurityCamera() {
 **Your Task:**
 1.  Analyze the combined video and audio feed.
 2.  **Provide a live transcription of any spoken words.** The transcription MUST be accurate with proper grammar and be prefixed with "TRANSCRIPT: ".
-3.  Describe visual observations in short, factual statements. Do not prefix these.
-4.  Evaluate the risk level based on the rules below.
+3.  **Describe visual observations in short, factual statements.** All observations MUST be prefixed with "ANALYSIS: ".
+4.  **Evaluate and state the risk in every analysis.** Your analysis MUST end with the current risk level, like "RISK: SAFE", "RISK: WARNING", or "RISK: DANGER".
 5.  Use tools immediately when conditions are met.
 
 **Risk Levels & Triggers:**
@@ -445,6 +479,10 @@ export default function SecurityCamera() {
     *   Seeing fire, smoke, or a weapon.
     *   Seeing someone attempting to force a door or window.
     *   Hearing glass shatter, an explosion, or a direct physical attack.
+
+**Risk Evaluation Rules:**
+*   **Constant Re-evaluation:** You MUST re-evaluate the risk level with every piece of new information from the audio and video stream.
+*   **Risk Downgrade:** If a threat has clearly passed (e.g., a person leaves, a noise stops), you MUST downgrade the risk level. For example, after a package is delivered and the delivery person has left the scene, the risk should return from WARNING to SAFE.
 
 **Tool Rules:**
 *   \`sendNotification\`: Use ONLY for a package delivery (sets WARNING).
@@ -508,7 +546,7 @@ export default function SecurityCamera() {
   }, []);
 
   useEffect(() => {
-    const frameInterval = setInterval(captureAndSendFrame, 1000);
+    const frameInterval = setInterval(() => captureAndSendFrame(2), 2000); // Send 2 frames every 2 seconds
     const queueInterval = setInterval(processResponseQueue, 100);
     return () => {
       clearInterval(frameInterval);
@@ -586,19 +624,28 @@ export default function SecurityCamera() {
               {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
             </div>
           </div>
-          <div className="w-1/2 flex flex-col items-start justify-start">
-            {/* Optionally add waveform here */}
-            <div className="mb-2 w-full flex items-center justify-center">
-              {/* Placeholder for waveform */}
-              <svg height="32" width="120" className="text-gray-400 mb-2"><g><rect x="5" y="10" width="4" height="12" rx="2" fill="currentColor"/><rect x="15" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="25" y="12" width="4" height="10" rx="2" fill="currentColor"/><rect x="35" y="8" width="4" height="16" rx="2" fill="currentColor"/><rect x="45" y="14" width="4" height="8" rx="2" fill="currentColor"/><rect x="55" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="65" y="10" width="4" height="12" rx="2" fill="currentColor"/><rect x="75" y="8" width="4" height="16" rx="2" fill="currentColor"/><rect x="85" y="12" width="4" height="10" rx="2" fill="currentColor"/><rect x="95" y="6" width="4" height="20" rx="2" fill="currentColor"/><rect x="105" y="10" width="4" height="12" rx="2" fill="currentColor"/></g></svg>
+          <div className="w-1/2 flex flex-col items-start justify-start gap-4">
+            {/* Transcription Box */}
+            <div className="h-40 w-full bg-gray-800 rounded-lg flex flex-col">
+              <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Transcription</h3>
+              <div ref={transcriptionsRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
+                {transcriptions.filter(t => t.type === 'transcription').map((t) => (
+                  <p key={t.id} className={`text-sm animate-fade-in ${getTranscriptionColor(t.type)}`}>
+                    <span className="font-mono text-xs">{`[${formatTimestamp(new Date())}] `}</span>
+                    {`"${t.text}"`}
+                  </p>
+                ))}
+              </div>
             </div>
-            <div className="h-64 overflow-y-auto w-full bg-gray-800 rounded-lg p-3">
-              <h3 className="text-sm font-semibold mb-2 border-b border-gray-600 pb-1">Observations</h3>
-              <div ref={observationsRef} className="space-y-1">
-                {transcriptions.map((t) => (
-                  <p key={t.id} className={`text-sm ${getTranscriptionColor(t.type)}`}>
+            
+            {/* Analysis Box */}
+            <div className="h-40 w-full bg-gray-800 rounded-lg flex flex-col">
+              <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Analysis & Logs</h3>
+              <div ref={analysisRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
+                 {transcriptions.filter(t => t.type !== 'transcription').map((t) => (
+                  <p key={t.id} className={`text-sm animate-fade-in ${getTranscriptionColor(t.type)}`}>
                     <span className="font-mono text-xs">{`[${t.type.toUpperCase()}] `}</span>
-                    {t.type === 'transcription' ? `"${t.text}"` : t.text}
+                    {t.text}
                   </p>
                 ))}
               </div>
