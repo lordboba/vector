@@ -671,22 +671,23 @@ export default function SecurityCamera() {
   // --- Sound Wave Component ---
   const SoundWave = ({ analyserNode, isConnected }: { analyserNode: AnalyserNode | null, isConnected: boolean }) => {
     const canvasRef = useRef<HTMLCanvasElement>(null);
+    const barHeightsRef = useRef<number[]>(new Array(5).fill(4));
 
     useEffect(() => {
-      if (!analyserNode || !isConnected || !canvasRef.current) {
-        const canvas = canvasRef.current;
+      const canvas = canvasRef.current;
+      if (!analyserNode || !isConnected || !canvas) {
         if (canvas) {
           const context = canvas.getContext('2d');
           context?.clearRect(0, 0, canvas.width, canvas.height);
         }
+        barHeightsRef.current = new Array(5).fill(4);
         return;
       }
 
-      const canvas = canvasRef.current;
       const context = canvas.getContext('2d');
       if (!context) return;
 
-      analyserNode.fftSize = 64; // Fewer bars for a cleaner look
+      analyserNode.fftSize = 64;
       const bufferLength = analyserNode.frequencyBinCount;
       const dataArray = new Uint8Array(bufferLength);
       
@@ -698,19 +699,55 @@ export default function SecurityCamera() {
       const draw = () => {
         animationFrameId = requestAnimationFrame(draw);
         analyserNode.getByteFrequencyData(dataArray);
-        context.clearRect(0, 0, canvasWidth, canvasHeight);
         
-        const barWidth = 10;
-        const barSpacing = 10;
-        const totalBarsWidth = bufferLength * (barWidth + barSpacing) - barSpacing;
-        let x = (canvasWidth - totalBarsWidth) / 2;
+        const sum = dataArray.reduce((a, b) => a + b, 0);
+        const avg = bufferLength > 0 ? sum / bufferLength : 0;
 
-        for (let i = 0; i < bufferLength; i++) {
-          const barHeight = dataArray[i] / 2.0;
-          context.fillStyle = '#404040';
-          context.fillRect(x, canvasHeight - barHeight, barWidth, barHeight);
-          x += barWidth + barSpacing;
+        context.clearRect(0, 0, canvasWidth, canvasHeight);
+
+        const numBars = 5;
+        const barWidth = 2; // Thinner bars
+        const barSpacing = 5;
+        const minHeight = 1; // For the flat bar when silent
+        const maxHeight = canvasHeight;
+        const heightPattern = [0.7, 0.4, 0.5, 0.6, 0.8]; // More varied pattern
+        const sensitivity = 0.4; // Reduced sensitivity
+        const silenceThreshold = 20;
+        const randomFactor = 0.4; // Reduced randomness for smoother animation
+
+        const effectiveAvg = avg > silenceThreshold ? avg : 0;
+
+        if (effectiveAvg === 0) {
+            // If silent, decay rapidly to minHeight
+            barHeightsRef.current = barHeightsRef.current.map(currentHeight =>
+                Math.max(minHeight, currentHeight * 0.65) // Fast decay to flatten bars
+            );
+        } else {
+            // If there's sound, calculate target heights and animate towards them
+            const targetHeights = heightPattern.map(p =>
+                minHeight + (effectiveAvg * sensitivity * p * (1 + (Math.random() - 0.5) * randomFactor))
+            );
+
+            barHeightsRef.current = barHeightsRef.current.map((currentHeight, i) => {
+                const smoothing = 0.25; // Consistent smoothing for both growth and decay
+                return Math.max(minHeight, currentHeight + (targetHeights[i] - currentHeight) * smoothing);
+            });
         }
+        
+        const totalWidth = numBars * barWidth + (numBars - 1) * barSpacing;
+        let x = (canvasWidth - totalWidth) / 2;
+        const centerY = canvasHeight / 2;
+
+        barHeightsRef.current.forEach(barHeight => {
+            context.beginPath();
+            context.moveTo(x, centerY - barHeight / 2);
+            context.lineTo(x, centerY + barHeight / 2);
+            context.lineWidth = barWidth;
+            context.strokeStyle = '#404040';
+            context.lineCap = 'round';
+            context.stroke();
+            x += barWidth + barSpacing;
+        });
       };
 
       draw();
@@ -720,7 +757,7 @@ export default function SecurityCamera() {
       };
     }, [analyserNode, isConnected]);
 
-    return <canvas ref={canvasRef} width="120" height="24" className="ml-2" />;
+    return <canvas ref={canvasRef} width="60" height="24" className="ml-2 -translate-y-px" />;
   };
 
   // --- UI Rendering ---
