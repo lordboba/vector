@@ -266,22 +266,33 @@ export default function SecurityCamera() {
               const endFence = '```';
               let buffer = partialJsonResponse.current;
               
-              const startIndex = buffer.indexOf(startFence);
-              const endIndex = buffer.indexOf(endFence, startIndex + startFence.length);
+              // Process all complete JSON blocks in the buffer
+              while (true) {
+                const startIndex = buffer.indexOf(startFence);
+                const endIndex = buffer.indexOf(endFence, startIndex + startFence.length);
 
-              // Only proceed if we have what looks like a complete block
-              if (startIndex !== -1 && endIndex !== -1) {
+                // If a full block isn't found, wait for more data
+                if (startIndex === -1 || endIndex === -1) {
+                  break;
+                }
+                
                 const jsonString = buffer.substring(startIndex + startFence.length, endIndex).trim();
                 
                 try {
                   const parsedJson = JSON.parse(jsonString);
                   processJson(parsedJson);
+                  // Successfully parsed, so remove the block from the buffer and continue
+                  buffer = buffer.substring(endIndex + endFence.length);
                 } catch (e) {
-                  console.error('[DEBUG] Failed to parse JSON object, discarding the corrupt block.', { jsonString, error: e });
+                  // This is expected if the JSON is streaming and incomplete.
+                  if (e instanceof SyntaxError) {
+                    // It's possible to find fences but have incomplete JSON.
+                    // Break and wait for more data.
+                  } else {
+                    console.error('[DEBUG] Error parsing JSON object.', { jsonString, error: e });
+                  }
+                  break; 
                 }
-
-                // After attempting to parse, remove the processed or corrupt block from the buffer.
-                buffer = buffer.substring(endIndex + endFence.length);
               }
               
               partialJsonResponse.current = buffer;
