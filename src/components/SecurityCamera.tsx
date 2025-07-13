@@ -139,7 +139,7 @@ export default function SecurityCamera() {
       if (!isStreamingRef.current) return;
 
       const now = new Date();
-      const twentySecondsAgo = new Date(now.getTime() - 20000);
+      const twentySecondsAgo = new Date(now.getTime() - 10000);
 
       const recentEvents = eventsStateRef.current.filter(e => e.timestamp > twentySecondsAgo);
       const recentTranscriptions = transcriptionsStateRef.current.filter(t => t.timestamp > twentySecondsAgo);

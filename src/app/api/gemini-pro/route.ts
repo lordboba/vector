@@ -1,19 +1,18 @@
 import { GoogleGenerativeAI } from "@google/generative-ai";
 import { NextRequest, NextResponse } from "next/server";
+import * as weave from "weave";
 
-export async function POST(req: NextRequest) {
-  try {
-    const { events, transcriptions } = await req.json();
-    console.log("Received data for Gemini Pro analysis:", { events, transcriptions });
+const getGeminiAnalysis = async (events: any, transcriptions: any) => {
+  if (!process.env.GEMINI_API_KEY) {
+    throw new Error("GEMINI_API_KEY environment variable not set");
+  }
 
-    if (!process.env.GEMINI_API_KEY) {
-      throw new Error("GEMINI_API_KEY environment variable not set");
-    }
+  const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
+  const model = genAI.getGenerativeModel({
+    model: "gemini-2.5-flash-lite-preview-06-17",
+  });
 
-    const genAI = new GoogleGenerativeAI(process.env.GEMINI_API_KEY);
-    const model = genAI.getGenerativeModel({ model: "gemini-2.5-flash-lite-preview-06-17" });
-
-    const prompt = `
+  const prompt = `
       You are a security analyst AI. You are receiving a stream of events and transcriptions from a security camera.
       Your task is to provide a deeper analysis of the situation based on the provided data.
 
@@ -33,23 +32,38 @@ export async function POST(req: NextRequest) {
       }
     `;
 
-    const result = await model.generateContent(prompt);
-    const response = await result.response;
-    const text = response.text();
+  const result = await model.generateContent(prompt);
+  const response = await result.response;
+  const text = response.text();
 
-    // The model might return the JSON wrapped in markdown, so we need to extract it.
-    const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
-    const jsonString = jsonMatch ? jsonMatch[1] : text;
+  // The model might return the JSON wrapped in markdown, so we need to extract it.
+  const jsonMatch = text.match(/```json\n([\s\S]*?)\n```/);
+  const jsonString = jsonMatch ? jsonMatch[1] : text;
 
-    try {
-        const parsedJson = JSON.parse(jsonString);
-        return NextResponse.json(parsedJson);
-    } catch (e) {
-        console.error("Failed to parse JSON from Gemini:", jsonString);
-        // Return the raw text if it's not valid JSON
-        return NextResponse.json({ analysis: jsonString });
-    }
+  try {
+    const parsedJson = JSON.parse(jsonString);
+    return parsedJson;
+  } catch (e) {
+    console.error("Failed to parse JSON from Gemini:", jsonString);
+    // Return the raw text if it's not valid JSON
+    return { analysis: jsonString };
+  }
+};
 
+const getGeminiAnalysisOp = weave.op(getGeminiAnalysis);
+
+export async function POST(req: NextRequest) {
+  try {
+    await weave.init("gemini-pro-analysis");
+    const { events, transcriptions } = await req.json();
+    console.log("Received data for Gemini Pro analysis:", {
+      events,
+      transcriptions,
+    });
+
+    const result = await getGeminiAnalysisOp(events, transcriptions);
+
+    return NextResponse.json(result);
   } catch (error: any) {
     console.error("Error in gemini-pro route:", error);
     return NextResponse.json({ error: error.message }, { status: 500 });
