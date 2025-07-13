@@ -357,7 +357,7 @@ export default function SecurityCamera() {
         if (!ctx) return;
     
         ctx.drawImage(videoRef.current, 0, 0, canvas.width, canvas.height);
-        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg'));
+        const blob = await new Promise<Blob | null>(resolve => canvas.toBlob(resolve, 'image/jpeg', 0.8));
     
         if (blob) {
         const reader = new FileReader();
@@ -482,12 +482,12 @@ export default function SecurityCamera() {
 
 **Your Task:**
 1.  Analyze the combined video and audio feed.
-2.  Respond with a JSON object that conforms to the provided schema.
+2.  Respond with a valid JSON object that conforms to the provided schema. Ensure that any double quotes inside a JSON string value are properly escaped with a backslash (e.g., "description": "He said, \\"hello\\".").
 3.  **thought:** Explain your reasoning for the analysis and risk level. This is for debugging and not shown to the user.
 4.  **analysis:** Describe visual observations in short, factual statements.
 5.  **transcription:** Provide a live transcription of any spoken words. If no speech is detected, provide an empty string.
 6.  **riskLevel:** Evaluate and state the current risk level: "SAFE", "WARNING", or "DANGER".
-7.  Use tools immediately when conditions are met.
+7.  Use the provided tool-calling functions when conditions are met. **Do not include tool calls or related information in the JSON response.**
 
 **Risk Levels & Triggers:**
 *   **SAFE:** The default state. No activity or normal passersby.
@@ -507,7 +507,7 @@ export default function SecurityCamera() {
 
 **Tool Rules:**
 *   \`sendNotification\`: Use ONLY for a package delivery (sets WARNING).
-*   \`call911\`: Use ONLY for a DANGER-level event. State the exact reason in the \`reason\` parameter.`,
+*   \`call911\`: Use ONLY for a DANGER-level event. Call the function with the \`reason\` parameter detailing the emergency.`,
         toolConfig: {
           functionDeclarations: [call911Tool, sendNotificationTool, doorTool],
         },
@@ -567,7 +567,7 @@ export default function SecurityCamera() {
   }, []);
 
   useEffect(() => {
-    const frameInterval = setInterval(() => captureAndSendFrame(2), 2000); // Send 2 frames every 2 seconds
+    const frameInterval = setInterval(() => captureAndSendFrame(1), 1000); // Send 1 frame every 2 seconds
     const queueInterval = setInterval(processResponseQueue, 100);
     return () => {
       clearInterval(frameInterval);
