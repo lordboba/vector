@@ -3,6 +3,7 @@
 import { useState, useRef, useEffect, useCallback } from 'react';
 import { GoogleGenAI, Modality, Tool, FunctionDeclaration } from '@google/genai';
 import Popup from '@/components/popup';
+import icon from "@/components/icon.png";
 
 // --- Type Definitions ---
 interface Transcription {
@@ -634,7 +635,8 @@ export default function SecurityCamera() {
   return (
     <div className="flex flex-col h-screen bg-neutral-100 text-neutral-700 font-mono">
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
-        <h1 className="text-4xl font-bold translate-x-4"><em>Vector</em></h1>
+        <img src={icon.src} alt="Vector Logo" className="h-12 w-auto"/>
+        <h1 className="absolute translate-x-10 translate-y-1 text-2xl"><em>ector</em></h1>
         <div className="flex items-center gap-4">
           <button onClick={() => setIsPopupOpen(true)}><h2 className="text-2xl -translate-x-4 underline hover:text-neutral-800 cursor-pointer">about</h2></button>
           <Popup isOpen={isPopupOpen} onClose={() => setIsPopupOpen(false)}>
