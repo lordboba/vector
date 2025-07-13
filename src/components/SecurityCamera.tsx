@@ -70,6 +70,31 @@ const doorTool: FunctionDeclaration = {
   } as any,
 };
 
+// --- Response Schema ---
+const responseSchema = {
+  type: 'OBJECT',
+  properties: {
+    thought: {
+      type: 'STRING',
+      description: 'Internal monologue and reasoning for the analysis and risk assessment. This is for debugging and not shown to the user.'
+    },
+    analysis: {
+      type: 'STRING',
+      description: 'A description of visual observations and events, to be displayed to the user.'
+    },
+    transcription: {
+      type: 'STRING',
+      description: 'A live transcription of any spoken words. Should be an empty string if no speech is detected.'
+    },
+    riskLevel: {
+      type: 'STRING',
+      enum: ['SAFE', 'WARNING', 'DANGER'],
+      description: 'The current assessed risk level.'
+    }
+  },
+  required: ['thought', 'analysis', 'riskLevel']
+} as any;
+
 // --- Component ---
 export default function SecurityCamera() {
   const [riskLevel, setRiskLevel] = useState<RiskLevel>('SAFE');
@@ -89,6 +114,7 @@ export default function SecurityCamera() {
   const transcriptionsRef = useRef<HTMLDivElement>(null);
   const analysisRef = useRef<HTMLDivElement>(null);
   const eventsRef = useRef<HTMLDivElement>(null);
+  const partialJsonResponse = useRef('');
 
   // --- Utility Functions ---
   const addTranscription = useCallback((text: string, type: Transcription['type']) => {
@@ -132,61 +158,69 @@ export default function SecurityCamera() {
     isProcessingQueueRef.current = true;
     console.log(`[DEBUG] Processing queue. Size: ${responseQueueRef.current.length}`);
 
+    const processJson = (json: any) => {
+      console.log('[DEBUG] JSON response processed:', json);
+      const { thought, analysis, transcription, riskLevel: newRiskLevel } = json;
+
+      if (transcription) {
+        addTranscription(transcription, 'transcription');
+      }
+      if (analysis) {
+        addTranscription(analysis, 'analysis');
+        console.log(`[AI Thought] ${thought}`);
+      }
+      if (newRiskLevel) {
+        setRiskLevel(prevRiskLevel => {
+          if (prevRiskLevel !== newRiskLevel) {
+            addEvent(`Risk level changed to ${newRiskLevel}`, 'risk-change');
+          }
+          return newRiskLevel as RiskLevel;
+        });
+      }
+    };
+
     while (responseQueueRef.current.length > 0) {
       const message = responseQueueRef.current.shift();
       if (!message) continue;
 
       try {
         console.log('[DEBUG] Processing message:', JSON.stringify(message, null, 2));
+
         if (message.serverContent?.modelTurn?.parts) {
-          const parts = message.serverContent.modelTurn.parts;
-          let i = 0;
-          while (i < parts.length) {
-            const part = parts[i];
-            
+          for (const part of message.serverContent.modelTurn.parts) {
             if (part.functionCall) {
               console.log('[DEBUG] Function call detected:', part.functionCall);
               await handleToolCall(part.functionCall.name, part.functionCall.args);
-              i++;
+              partialJsonResponse.current = ''; // Clear buffer on tool call
               continue;
             }
 
-            if (!part.text) {
-              i++;
-              continue;
-            }
-
-            if (part.text.startsWith('TRANSCRIPT: ')) {
-              let content = part.text.replace('TRANSCRIPT: ', '');
-              let j = i + 1;
-              while (j < parts.length && parts[j].text && !parts[j].text.startsWith('TRANSCRIPT: ') && !parts[j].text.startsWith('ANALYSIS: ')) {
-                content += parts[j].text;
-                j++;
-              }
-              addTranscription(content, 'transcription');
-              i = j;
-            } else {
-              // Treat as analysis by default, and merge continuations
-              let content = part.text.startsWith('ANALYSIS: ') ? part.text.replace('ANALYSIS: ', '') : part.text;
-              let j = i + 1;
-              while (j < parts.length && parts[j].text && !parts[j].text.startsWith('TRANSCRIPT: ') && !parts[j].text.startsWith('ANALYSIS: ')) {
-                content += parts[j].text;
-                j++;
-              }
+            if (part.json) {
+              processJson(part.json);
+              partialJsonResponse.current = '';
+            } else if (part.text) {
+              partialJsonResponse.current += part.text;
               
-              addTranscription(content, 'analysis');
-              const riskMatch = content.match(/RISK: (SAFE|WARNING|DANGER)/);
+              // Use regex to find all JSON blocks in the buffer
+              const jsonRegex = /```json\s*({[\s\S]*?})\s*```/g;
+              let match;
+              let lastIndex = 0;
 
-              if (riskMatch && riskMatch[1]) {
-                const newRiskLevel = riskMatch[1] as RiskLevel;
-                setRiskLevel(prevRiskLevel => {
-                  if (prevRiskLevel !== newRiskLevel) {
-                    addEvent(`Risk level changed to ${newRiskLevel}`, 'risk-change');
-                  }
-                  return newRiskLevel;
-                });
+              while ((match = jsonRegex.exec(partialJsonResponse.current)) !== null) {
+                const jsonString = match[1];
+                try {
+                  const parsedJson = JSON.parse(jsonString);
+                  processJson(parsedJson);
+                } catch (e) {
+                  console.error('[DEBUG] Failed to parse extracted JSON:', jsonString, e);
+                }
+                lastIndex = match.index + match[0].length;
               }
-              i = j;
+
+              // Trim processed JSON from the buffer
+              if (lastIndex > 0) {
+                partialJsonResponse.current = partialJsonResponse.current.substring(lastIndex);
+              }
             }
           }
         }
@@ -196,7 +230,7 @@ export default function SecurityCamera() {
         setError(errorMessage);
         addTranscription(errorMessage, 'error');
         addEvent(errorMessage, 'error');
-        // Don't stop streaming for processing errors - continue with next message
+        partialJsonResponse.current = '';
       }
     }
 
@@ -434,7 +468,8 @@ export default function SecurityCamera() {
 
       const config = {
         responseModalities: [Modality.TEXT],
-        systemInstruction: `You are Vector AI, a security guard for a live demonstration. Your primary goal is to demonstrate your capabilities by reacting to simulated events.
+        responseJsonSchema: responseSchema,
+        systemInstruction: `You are Vector AI, a security guard for a live demonstration. Your primary goal is to demonstrate your capabilities by reacting to simulated events by providing structured JSON data.
 
 **DEMO INSTRUCTIONS:**
 *   **Treat all inputs as real:** You MUST react to acted scenarios, verbal threats, and test events as if they are genuine security risks.
@@ -442,10 +477,12 @@ export default function SecurityCamera() {
 
 **Your Task:**
 1.  Analyze the combined video and audio feed.
-2.  **Provide a live transcription of any spoken words.** The transcription MUST be accurate with proper grammar and be prefixed with "TRANSCRIPT: ".
-3.  **Describe visual observations in short, factual statements.** All observations MUST be prefixed with "ANALYSIS: ".
-4.  **Evaluate and state the risk in every analysis.** Your analysis MUST end with the current risk level, like "RISK: SAFE", "RISK: WARNING", or "RISK: DANGER".
-5.  Use tools immediately when conditions are met.
+2.  Respond with a JSON object that conforms to the provided schema.
+3.  **thought:** Explain your reasoning for the analysis and risk level. This is for debugging and not shown to the user.
+4.  **analysis:** Describe visual observations in short, factual statements.
+5.  **transcription:** Provide a live transcription of any spoken words. If no speech is detected, provide an empty string.
+6.  **riskLevel:** Evaluate and state the current risk level: "SAFE", "WARNING", or "DANGER".
+7.  Use tools immediately when conditions are met.
 
 **Risk Levels & Triggers:**
 *   **SAFE:** The default state. No activity or normal passersby.
