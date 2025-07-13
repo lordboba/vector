@@ -590,6 +590,39 @@ export default function SecurityCamera() {
     };
   }, [captureAndSendFrame, processResponseQueue, stopStreaming, sendAudio]);
 
+  // --- Sound Wave Component ---
+  const SoundWave = ({ active }: { active: boolean }) => {
+    const heights = ['h-2', 'h-3', 'h-4', 'h-3', 'h-2'];
+    
+    return (
+      <div className="flex items-center space-x-1 ml-2">
+        {[...Array(5)].map((_, i) => (
+          <div
+            key={i}
+            className={`w-1 bg-neutral-700 rounded transition-all duration-300 ${
+              active ? heights[i] : 'h-1'
+            }`}
+            style={{
+              animation: active 
+                ? `waveAnimation ${0.5 + i * 0.1}s infinite ease-in-out alternate` 
+                : undefined,
+
+            }}
+          />
+        ))}
+        
+        <style dangerouslySetInnerHTML={{
+          __html: `
+            @keyframes waveAnimation {
+              0% { transform: scaleY(1); }
+              100% { transform: scaleY(2); }
+            }
+          `
+        }} />
+      </div>
+    );
+  };
+
   // --- UI Rendering ---
   const getRiskLevelColor = () => {
     switch (riskLevel) {
@@ -632,6 +665,10 @@ export default function SecurityCamera() {
     });
   }
 
+  const [isTalking, setIsTalking] = useState(false);
+
+
+
   return (
     <div className="flex flex-col h-screen bg-neutral-100 text-neutral-700 font-mono">
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
@@ -663,9 +700,12 @@ export default function SecurityCamera() {
                 {status !== 'Connected' && <div className="absolute inset-0 bg-neutral-800 bg-opacity-50 flex items-center justify-center text-xl text-neutral-100">Camera Off</div>}
               </div>
             </div>
-            <div className="flex-1 bg-transparent rounded-lg flex flex-col overflow-hidden">
-              <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Transcription</h3>
-              <div ref={transcriptionsRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
+            <div className="flex flex-col w-1/2">
+              <div className="flex items-center border-b border-gray-600 p-3 pb-2">
+                <h3 className="text-sm font-semibold">Transcription</h3>
+                <SoundWave active={isTalking} />
+              </div>
+              <div ref={transcriptionsRef} className="flex-1 overflow-y-auto p-3 pt-3 space-y-1">
                 {transcriptions.filter(t => t.type === 'transcription').map((t) => (
                   <p key={t.id} className={`text-sm animate-fade-in ${getTranscriptionColor(t.type)}`}>
                     <span className="font-mono text-xs">{`[${formatTimestamp(new Date())}] `}</span>
@@ -675,6 +715,7 @@ export default function SecurityCamera() {
               </div>
             </div>
           </div>
+        </div>
           {/* Risk Banner */}
         <div className="w-full flex flex-col items-center">
           <div className={`w-full py-3 text-lg font-bold rounded-lg text-center text-neutral-100 ${
@@ -711,8 +752,6 @@ export default function SecurityCamera() {
                 </div>
             </div>
           </div>
-        </div>
-        
         
       </main>
     </div>
