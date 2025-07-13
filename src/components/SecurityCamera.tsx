@@ -200,27 +200,30 @@ export default function SecurityCamera() {
               partialJsonResponse.current = '';
             } else if (part.text) {
               partialJsonResponse.current += part.text;
-              
-              // Use regex to find all JSON blocks in the buffer
-              const jsonRegex = /```json\s*({[\s\S]*?})\s*```/g;
-              let match;
-              let lastIndex = 0;
 
-              while ((match = jsonRegex.exec(partialJsonResponse.current)) !== null) {
-                const jsonString = match[1];
+              const startFence = '```json';
+              const endFence = '```';
+              let buffer = partialJsonResponse.current;
+              
+              const startIndex = buffer.indexOf(startFence);
+              const endIndex = buffer.indexOf(endFence, startIndex + startFence.length);
+
+              // Only proceed if we have what looks like a complete block
+              if (startIndex !== -1 && endIndex !== -1) {
+                const jsonString = buffer.substring(startIndex + startFence.length, endIndex).trim();
+                
                 try {
                   const parsedJson = JSON.parse(jsonString);
                   processJson(parsedJson);
                 } catch (e) {
-                  console.error('[DEBUG] Failed to parse extracted JSON:', jsonString, e);
+                  console.error('[DEBUG] Failed to parse JSON object, discarding the corrupt block.', { jsonString, error: e });
                 }
-                lastIndex = match.index + match[0].length;
-              }
 
-              // Trim processed JSON from the buffer
-              if (lastIndex > 0) {
-                partialJsonResponse.current = partialJsonResponse.current.substring(lastIndex);
+                // After attempting to parse, remove the processed or corrupt block from the buffer.
+                buffer = buffer.substring(endIndex + endFence.length);
               }
+              
+              partialJsonResponse.current = buffer;
             }
           }
         }
@@ -627,23 +630,22 @@ export default function SecurityCamera() {
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
         <h1 className="text-2xl font-bold">Vector AI Security Camera (Live API)</h1>
         <div className="flex items-center gap-4">
-          <div className="text-sm">STATUS: {status}</div>
-          <div className={`text-xl font-bold ${getRiskLevelColor()}`}>
-            RISK LEVEL: {riskLevel}
-          </div>
+
         </div>
       </header>
       <main className="flex flex-col flex-1 p-4 gap-4 overflow-hidden">
-        <div className="flex flex-row gap-8 flex-1">
-          <div className="flex-1 flex flex-col items-center justify-start">
-            <div className="bg-black rounded-lg overflow-hidden aspect-video relative w-full max-w-lg">
-              <video ref={videoRef} playsInline muted className="w-full h-full object-cover"></video>
-              {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
+        {/* Main content area with vertical stacking */}
+        <div className="flex flex-col gap-4 flex-1 overflow-hidden">
+          
+          {/* Top Row: Camera + Transcription */}
+          <div className="flex-1 flex flex-row gap-4 overflow-hidden">
+            <div className="flex-1 flex items-center justify-center">
+              <div className="bg-black rounded-lg overflow-hidden aspect-video relative w-full">
+                <video ref={videoRef} playsInline muted className="w-full h-full object-cover"></video>
+                {status !== 'Connected' && <div className="absolute inset-0 bg-black bg-opacity-50 flex items-center justify-center text-xl">Camera Off</div>}
+              </div>
             </div>
-          </div>
-          <div className="w-1/2 flex flex-col items-start justify-start gap-4">
-            {/* Transcription Box */}
-            <div className="h-40 w-full bg-gray-800 rounded-lg flex flex-col">
+            <div className="flex-1 bg-gray-800 rounded-lg flex flex-col overflow-hidden">
               <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Transcription</h3>
               <div ref={transcriptionsRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
                 {transcriptions.filter(t => t.type === 'transcription').map((t) => (
@@ -654,9 +656,19 @@ export default function SecurityCamera() {
                 ))}
               </div>
             </div>
-            
+          </div>
+          {/* Risk Banner */}
+        <div className="w-full flex flex-col items-center">
+          <div className={`w-full py-3 text-lg font-bold rounded-lg text-center ${
+            riskLevel === 'DANGER' ? 'bg-red-600' : riskLevel === 'WARNING' ? 'bg-yellow-600 text-black' : 'bg-green-600'
+          }`}>
+            Risk Level: {riskLevel}
+          </div>
+        </div>
+          {/* Bottom Row: Log panels */}
+          <div className="flex-1 flex flex-row gap-4 overflow-hidden">
             {/* Analysis Box */}
-            <div className="h-40 w-full bg-gray-800 rounded-lg flex flex-col">
+            <div className="flex-1 bg-gray-800 rounded-lg flex flex-col overflow-hidden">
               <h3 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Analysis & Logs</h3>
               <div ref={analysisRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
                  {transcriptions.filter(t => t.type !== 'transcription').map((t) => (
@@ -667,28 +679,23 @@ export default function SecurityCamera() {
                 ))}
               </div>
             </div>
-          </div>
-        </div>
-        <div className="w-full flex flex-col items-center mt-4">
-          <div className={`w-full max-w-2xl py-3 text-lg font-bold rounded-lg text-center ${
-            riskLevel === 'DANGER' ? 'bg-red-600' : riskLevel === 'WARNING' ? 'bg-yellow-600 text-black' : 'bg-green-600'
-          }`}>
-            Risk Level: {riskLevel}
-          </div>
-        </div>
-        <div className="w-full flex flex-col bg-gray-800 rounded-lg p-4 mt-4 max-w-2xl mx-auto">
-          <h2 className="text-xl font-semibold mb-2 border-b border-gray-600 pb-2">Events</h2>
-          <div ref={eventsRef} className="h-48 overflow-y-auto pr-2">
-            <div className="space-y-1">
-              {events.map((e) => (
-                <p key={e.id} className={`text-sm ${getEventColor(e.type)}`}>
-                  <span className="font-mono text-xs">{`[${e.type.toUpperCase()}] ${formatTimestamp(e.timestamp)} `}</span>
-                  {e.text}
-                </p>
-              ))}
+
+            {/* Events Box */}
+            <div className="flex-1 bg-gray-800 rounded-lg flex flex-col overflow-hidden">
+                <h2 className="text-sm font-semibold border-b border-gray-600 p-3 pb-2">Events</h2>
+                <div ref={eventsRef} className="flex-1 overflow-y-auto p-3 pt-2 space-y-1">
+                    {events.map((e) => (
+                    <p key={e.id} className={`text-sm ${getEventColor(e.type)}`}>
+                        <span className="font-mono text-xs">{`[${e.type.toUpperCase()}] ${formatTimestamp(e.timestamp)} `}</span>
+                        {e.text}
+                    </p>
+                    ))}
+                </div>
             </div>
           </div>
         </div>
+        
+        
       </main>
     </div>
   );
