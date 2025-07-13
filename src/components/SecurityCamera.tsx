@@ -10,6 +10,7 @@ interface Transcription {
   id: string;
   text: string;
   type: 'analysis' | 'tool-call' | 'tool-result' | 'error' | 'status' | 'transcription';
+  timestamp: Date;
 }
 
 interface Event {
@@ -119,10 +120,67 @@ export default function SecurityCamera() {
   const partialJsonResponse = useRef('');
   const [isPopupOpen, setIsPopupOpen] = useState(false);
 
+  // Refs to hold the current state for access in intervals
+  const eventsStateRef = useRef<Event[]>(events);
+  const transcriptionsStateRef = useRef<Transcription[]>(transcriptions);
+
+  useEffect(() => {
+    eventsStateRef.current = events;
+  }, [events]);
+
+  useEffect(() => {
+    transcriptionsStateRef.current = transcriptions;
+  }, [transcriptions]);
+
+
+  // --- Send data to Gemini Pro for analysis ---
+  useEffect(() => {
+    const intervalId = setInterval(async () => {
+      if (!isStreamingRef.current) return;
+
+      const now = new Date();
+      const twentySecondsAgo = new Date(now.getTime() - 10000);
+
+      const recentEvents = eventsStateRef.current.filter(e => e.timestamp > twentySecondsAgo);
+      const recentTranscriptions = transcriptionsStateRef.current.filter(t => t.timestamp > twentySecondsAgo);
+
+      if (recentEvents.length === 0 && recentTranscriptions.length === 0) {
+        return;
+      }
+
+      console.log('[DEBUG] Sending data to Gemini Pro for analysis...');
+
+      try {
+        const response = await fetch('/api/gemini-pro', {
+          method: 'POST',
+          headers: {
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify({
+            events: recentEvents,
+            transcriptions: recentTranscriptions,
+          }),
+        });
+
+        if (response.ok) {
+          const data = await response.json();
+          console.log('[DEBUG] Gemini Pro analysis received:', data);
+          // For now, we don't do anything with the response in the UI.
+        } else {
+          console.error('[DEBUG] Error sending data to Gemini Pro:', response.statusText);
+        }
+      } catch (error) {
+        console.error('[DEBUG] Exception sending data to Gemini Pro:', error);
+      }
+    }, 20000);
+
+    return () => clearInterval(intervalId);
+  }, []); // Empty dependency array ensures this runs only once on mount
+
   // --- Utility Functions ---
   const addTranscription = useCallback((text: string, type: Transcription['type']) => {
     const id = `transcription-${Date.now()}-${Math.random()}`;
-    setTranscriptions((prev) => [...prev, { id, text, type }]);
+    setTranscriptions((prev) => [...prev, { id, text, type, timestamp: new Date() }]);
     // Auto-scroll to bottom after state update
     setTimeout(() => {
       let refToScroll;
