@@ -485,7 +485,7 @@ export default function SecurityCamera() {
 2.  Respond with a valid JSON object that conforms to the provided schema. Ensure that any double quotes inside a JSON string value are properly escaped with a backslash (e.g., "description": "He said, \\"hello\\".").
 3.  **thought:** Explain your reasoning for the analysis and risk level. This is for debugging and not shown to the user.
 4.  **analysis:** Describe visual observations in short, factual statements.
-5.  **transcription:** Provide a live transcription of any spoken words. If no speech is detected, provide an empty string.
+5.  **transcription:** Provide a live transcription of any spoken English words, ignoring all other languages. If no speech is detected, provide an empty string.
 6.  **riskLevel:** Evaluate and state the current risk level: "SAFE", "WARNING", or "DANGER".
 7.  Use the provided tool-calling functions when conditions are met. **Do not include tool calls or related information in the JSON response.**
 
