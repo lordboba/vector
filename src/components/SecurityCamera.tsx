@@ -601,7 +601,7 @@ export default function SecurityCamera() {
         case 'analysis': return 'text-neutral-700';
         case 'transcription': return 'text-neutral-700';
         case 'tool-call': return 'text-neutral-700';
-        case 'tool-result': return 'text-purple-400';
+        case 'tool-result': return 'text-neutral-700';
         case 'status': return 'text-neutral-700';
         case 'error': return 'text-red-600';
         default: return 'text-neutral-700';
@@ -610,9 +610,9 @@ export default function SecurityCamera() {
 
   const getEventColor = (type: Event['type']) => {
     switch (type) {
-        case 'risk-change': return 'text-red-600';
+        case 'risk-change': return 'text-yellow-500';
         case 'tool-executed': return 'text-neutral-700';
-        case 'connection': return 'text-emerald-600';
+        case 'connection': return 'text-neutral-700';
         case 'error': return 'text-red-600';
         default: return 'text-neutral-700';
     }
@@ -630,9 +630,9 @@ export default function SecurityCamera() {
   return (
     <div className="flex flex-col h-screen bg-neutral-100 text-neutral-700 font-mono">
       <header className="p-4 border-b border-gray-700 flex justify-between items-center">
-        <h1 className="text-4xl font-bold translate-x-4">Vector</h1>
+        <h1 className="text-4xl font-bold translate-x-4"><em>Vector</em></h1>
         <div className="flex items-center gap-4">
-          <h2 className="text-2xl -translate-x-4">about</h2>
+          <h2 className="text-2xl -translate-x-4 underline">about</h2>
         </div>
       </header>
       <main className="flex flex-col flex-1 p-4 gap-4 overflow-hidden">
