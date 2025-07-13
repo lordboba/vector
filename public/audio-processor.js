@@ -2,7 +2,7 @@
 // The model expects audio chunks of 100ms duration.
 // At 16000 samples per second, 100ms is 1600 samples.
 // We'll buffer a bit more to be safe and reduce message frequency.
-const CHUNK_SIZE = 8192;
+const CHUNK_SIZE = 800;
 
 /**
  * AudioProcessor class for an AudioWorklet.
@@ -34,7 +34,7 @@ class AudioProcessor extends AudioWorkletProcessor {
     const newLength = Math.floor(input.length / ratio);
     const result = new Float32Array(newLength);
     let inputIndex = 0;
-    for (let i = 0; i < newLength; i++) {
+    for (let i = 0; i < newLength; i++) {thinkingBudget: 0
       // A simple downsampling algorithm (averaging can be better but this is faster).
       result[i] = input[Math.floor(inputIndex)];
       inputIndex += ratio;

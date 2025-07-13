@@ -472,6 +472,8 @@ export default function SecurityCamera() {
       const config = {
         responseModalities: [Modality.TEXT],
         responseJsonSchema: responseSchema,
+        temperature: 0,
+        thinkingBudget: 0,
         systemInstruction: `You are Vector AI, a security guard for a live demonstration. Your primary goal is to demonstrate your capabilities by reacting to simulated events by providing structured JSON data.
 
 **DEMO INSTRUCTIONS:**
